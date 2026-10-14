@@ -247,10 +247,3 @@ This completes **Phase 1** of the Face Attendance System implementation. The cor
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-*This project is part of the StarUp Face Attendance initiative.*
-Co-authored by Claude Code <noreply@anthropic.com>
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
