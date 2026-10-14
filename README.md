@@ -244,6 +244,10 @@ python main.py --test
 
 This completes **Phase 1** of the Face Attendance System implementation. The core pipeline works end-to-end with dummy data and provides a solid foundation for Phases 2-7.
 
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
 ---
 
 *This project is part of the StarUp Face Attendance initiative.*
