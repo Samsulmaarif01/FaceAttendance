@@ -1,0 +1,117 @@
+# Face Attendance System - Default Configuration
+# Override with config/local.yaml
+
+camera:
+  device_id: 0
+  width: 640
+  height: 480
+  fps: 30
+  backend: "opencv"  # opencv, picamera2
+
+detection:
+  model: "scrfd_10g_bnkps"
+  input_size: [640, 640]
+  conf_threshold: 0.5
+  nms_threshold: 0.4
+  max_faces: 10
+  quality:
+    min_face_size: 80
+    min_sharpness: 100
+    min_brightness: 40
+    max_brightness: 200
+
+recognition:
+  models:
+    - name: "arcface_r100"
+      weight: 0.5
+    - name: "cosface_r50"
+      weight: 0.3
+    - name: "mobilefacenet"
+      weight: 0.2
+  embedding_dim: 512
+  similarity_threshold: 0.45
+  adaptive_threshold:
+    enabled: true
+    min_threshold: 0.35
+    max_threshold: 0.55
+    update_rate: 0.05
+  tta:
+    enabled: true
+    augmentations: ["flip"]
+
+liveness:
+  passive:
+    model: "minifasnet_v2"
+    threshold: 0.7
+  active:
+    enabled: true
+    challenge_types: ["blink", "head_nod", "head_turn"]
+    challenge_duration: 3
+    max_attempts: 3
+  rppg:
+    enabled: false
+    window_seconds: 10
+
+database:
+  type: "sqlite"
+  path: "data/attendance.db"
+  encryption:
+    enabled: true
+    key_derivation: "pbkdf2"
+    iterations: 100000
+  vector_index:
+    type: "hnsw"
+    ef_construction: 200
+    ef_search: 100
+    m: 16
+
+sync:
+  enabled: true
+  interval_seconds: 300
+  batch_size: 50
+  compression: "zstd"
+  crdt:
+    type: "lww_element_set"
+  backoff:
+    initial_seconds: 5
+    max_seconds: 3600
+    multiplier: 2
+
+security:
+  biohashing:
+    enabled: true
+    token_length: 32
+    iterations: 1000
+  tls:
+    enabled: true
+    cert_path: "certs/server.pem"
+    key_path: "certs/server.key"
+    ca_path: "certs/ca.pem"
+  audit_log:
+    enabled: true
+    path: "logs/audit.log"
+    max_size_mb: 100
+    retention_days: 365
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 1
+  cors:
+    enabled: true
+    origins: ["*"]
+  rate_limit:
+    enabled: true
+    requests_per_minute: 60
+
+dashboard:
+  enabled: true
+  port: 3000
+  theme: "light"
+
+logging:
+  level: "INFO"
+  format: "json"
+  path: "logs/app.log"
+  max_size_mb: 50
+  backup_count: 5
