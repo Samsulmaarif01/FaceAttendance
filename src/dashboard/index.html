@@ -29,14 +29,15 @@
       </div>
       <div class="controls enroll">
         <input id="enroll-name" type="text" placeholder="Name (required to enroll)" />
+        <input id="enroll-id" type="text" placeholder="User ID (optional)" />
         <button id="btn-enroll">Enroll captured face</button>
         <input id="upload" type="file" accept="image/*" hidden />
-        <button id="btn-upload">Upload image…</button>
+        <button id="btn-upload">Register from image…</button>
       </div>
       <p class="hint">
         Enroll captured face: registers the current webcam frame under the name above
-        (needs the camera on). Upload image…: with a name it enrolls from the photo,
-        without a name it just previews recognition.
+        (needs the camera on). Register from image…: enrolls a face from a photo only —
+        it never writes attendance.
       </p>
       <p id="status" class="status"></p>
     </section>
@@ -46,14 +47,17 @@
       <div class="stats" id="stats"></div>
       <h2>Users <span class="muted" id="users-count"></span></h2>
       <div class="table-wrap"><table id="users"><thead>
-        <tr><th>ID</th><th>Name</th><th>Created</th></tr>
+        <tr><th>ID</th><th>Name</th><th>Last</th><th></th></tr>
       </thead><tbody></tbody></table></div>
     </section>
 
     <section class="panel wide">
       <div class="row">
         <h2>Attendance <span class="muted" id="att-count"></span></h2>
-        <button id="btn-sync">Sync now</button>
+        <div class="row-actions">
+          <button id="btn-sync">Sync now</button>
+          <button id="btn-clear-att" class="danger">Clear attendance</button>
+        </div>
       </div>
       <div class="table-wrap"><table id="attendance"><thead>
         <tr><th>User</th><th>Timestamp</th><th>Similarity</th><th>Synced</th></tr>

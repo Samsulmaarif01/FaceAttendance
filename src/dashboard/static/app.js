@@ -171,22 +171,24 @@ async function showPhoto(file) {
   videoMsg.style.display = "none";
   await photo.decode();
   setFrameSize(photo.naturalWidth, photo.naturalHeight);
+  overlay.getContext("2d").clearRect(0, 0, frameW, frameH);
 }
 
 async function onEnroll() {
   const name = $("enroll-name").value.trim();
+  const userId = $("enroll-id").value.trim();
   if (!name) {
     setStatus("Type a name first, then click Enroll captured face.", "err");
     $("enroll-name").focus();
     return;
   }
   if (!stream) {
-    setStatus("Start the camera first, or use Upload image… to enroll from a photo.", "err");
+    setStatus("Start the camera first, or use Register from image… to enroll from a photo.", "err");
     return;
   }
   try {
     const blob = await captureBlob();
-    const data = await enrollBlob(blob, name);
+    const data = await enrollBlob(blob, name, userId);
     setStatus(`Enrolled "${data.name}" (${data.user_id}).`, "ok");
   } catch (e) {
     setStatus("Enroll error: " + e.message, "err");
@@ -195,26 +197,34 @@ async function onEnroll() {
 
 async function onUpload(file) {
   const name = $("enroll-name").value.trim();
+  const userId = $("enroll-id").value.trim();
+  if (!name) {
+    setStatus("Type a name, then choose an image to register that face.", "err");
+    $("enroll-name").focus();
+    return;
+  }
   try {
     await showPhoto(file);
-    if (name) {
-      const enrolled = await enrollBlob(file, name);
-      const data = await recognizeBlob(file);
-      setStatus(`Enrolled "${enrolled.name}" and recognized ${data.count} face(s).`, "ok");
-    } else {
-      const data = await recognizeBlob(file);
-      const names = data.faces.filter((f) => f.match && f.match.matched).map((f) => f.match.name);
-      if (names.length) {
-        setStatus(`Recognized: ${names.join(", ")}.`, "ok");
-      } else {
-        setStatus(`${data.count} face(s), no match. Type a name and re-upload to enroll.`, "info");
-      }
-    }
-    refreshStats();
+    const data = await enrollBlob(file, name, userId);
+    drawRegisteredLabel(data.name);
+    setStatus(`Registered "${data.name}" (${data.user_id}) from image. No attendance written.`, "ok");
     refreshAttendance();
   } catch (e) {
-    setStatus("Upload error: " + e.message, "err");
+    setStatus("Register error: " + e.message, "err");
   }
+}
+
+function drawRegisteredLabel(name) {
+  const ctx = overlay.getContext("2d");
+  ctx.clearRect(0, 0, frameW, frameH);
+  const label = `registered: ${name}`;
+  const boxH = Math.max(18, frameW / 30);
+  ctx.font = `${Math.max(12, frameW / 42)}px system-ui, sans-serif`;
+  ctx.fillStyle = "#22c55e";
+  ctx.fillRect(0, 0, ctx.measureText(label).width + 12, boxH);
+  ctx.fillStyle = "#0f172a";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, 6, boxH / 2);
 }
 
 function statCard(k, v) {
@@ -232,14 +242,51 @@ async function refreshStats() {
   } catch (_) {}
 }
 
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
 async function refreshUsers() {
   try {
     const data = await fetchJSON("/api/users");
     $("users-count").textContent = `(${data.count})`;
     $("users").querySelector("tbody").innerHTML = data.users
-      .map((u) => `<tr><td class="mono">${u.id}</td><td>${u.name}</td><td>${u.created_at.slice(0, 19).replace("T", " ")}</td></tr>`)
+      .map((u) => {
+        const last = u.last_attendance ? u.last_attendance.slice(0, 19).replace("T", " ") : "—";
+        return `<tr>` +
+          `<td class="mono">${esc(u.id)}</td>` +
+          `<td>${esc(u.name)}</td>` +
+          `<td>${last}</td>` +
+          `<td><button class="icon danger" data-delete="${esc(u.id)}">Delete</button></td>` +
+          `</tr>`;
+      })
       .join("");
   } catch (_) {}
+}
+
+async function deleteUser(userId) {
+  if (!confirm(`Delete user "${userId}"? Their templates are deactivated.`)) return;
+  try {
+    await fetchJSON(`/api/users/${encodeURIComponent(userId)}`, { method: "DELETE" });
+    setStatus(`Deleted user ${userId}.`, "ok");
+    refreshUsers();
+    refreshStats();
+  } catch (e) {
+    setStatus("Delete error: " + e.message, "err");
+  }
+}
+
+async function clearAttendance() {
+  if (!confirm("Delete ALL attendance records? This cannot be undone.")) return;
+  try {
+    const r = await fetchJSON("/api/attendance", { method: "DELETE" });
+    setStatus(`Attendance cleared (${r.deleted} record(s) removed).`, "ok");
+    refreshAttendance();
+    refreshStats();
+    refreshUsers();
+  } catch (e) {
+    setStatus("Clear error: " + e.message, "err");
+  }
 }
 
 async function refreshAttendance() {
@@ -275,6 +322,11 @@ function wire() {
     e.target.value = "";
   });
   $("btn-sync").addEventListener("click", onSync);
+  $("btn-clear-att").addEventListener("click", clearAttendance);
+  $("users").querySelector("tbody").addEventListener("click", (e) => {
+    const id = e.target.getAttribute && e.target.getAttribute("data-delete");
+    if (id) deleteUser(id);
+  });
   video.addEventListener("loadedmetadata", () => {
     overlay.width = video.videoWidth;
     overlay.height = video.videoHeight;
