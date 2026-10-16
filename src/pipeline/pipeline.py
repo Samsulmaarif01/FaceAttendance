@@ -70,6 +70,14 @@ class PipelineConfig:
     audit_enabled: bool = True
     audit_log_path: str = "logs/audit.log"
 
+    # Sync (offline-first, phase 4)
+    sync_enabled: bool = False
+    sync_queue_path: str = "data/sync_queue.bin"
+    sync_max_batch: int = 50
+    sync_device_id: str = ""
+    sync_queue_max_size: int = 10000
+    sync_transport: Optional[object] = None  # injectable transport; NullTransport if None
+
     # System
     frame_skip: int = 2  # Process every Nth frame to save CPU
     display_output: bool = True
@@ -170,12 +178,30 @@ class FacePipeline:
         # Audit log
         self.audit_log = AuditLog(self.config.audit_log_path) if self.config.audit_enabled else None
 
-        # Database
+        # Sync (offline-first). Optional: the pipeline runs fully offline without it.
+        self.sync_queue = None
+        self.sync_manager = None
+        if self.config.sync_enabled:
+            from src.sync import NullTransport, SyncManager, SyncQueue
+
+            self.sync_queue = SyncQueue(
+                max_size=self.config.sync_queue_max_size,
+                persist_path=self.config.sync_queue_path,
+            )
+            transport = self.config.sync_transport or NullTransport()
+            self.sync_manager = SyncManager(
+                queue=self.sync_queue,
+                transport=transport,
+                max_batch=self.config.sync_max_batch,
+            )
+
+        # Database (enrollment/template/delete events are queued for sync when enabled)
         self.database = Database(
             db_path=self.config.database_path,
             encryption_key=self.config.database_encryption_key,
             biohash_token=self.config.database_biohash_token,
             audit_log=self.audit_log,
+            sync_queue=self.sync_queue,
         )
 
         if self.audit_log is not None:
@@ -184,6 +210,7 @@ class FacePipeline:
                 details={
                     "recognition_models": len(self.ensemble_extractor.models),
                     "detector_loaded": self.detector is not None,
+                    "sync_enabled": self.sync_manager is not None,
                 },
             )
 
@@ -249,8 +276,15 @@ class FacePipeline:
                     if match_result and match_result.matched:
                         # Update adaptive threshold
                         self.matcher.update_threshold(match_result.user_id, match_result.similarity)
-                        # Log attendance
-                        self.database.log_attendance(
+                        # Log attendance locally (works offline)
+                        record_id = self.database.log_attendance(
+                            user_id=match_result.user_id,
+                            similarity=match_result.similarity,
+                            liveness_score=liveness_result.score,
+                        )
+                        # Enqueue for sync (no-op when sync is disabled)
+                        self._enqueue_sync(
+                            record_id=record_id,
                             user_id=match_result.user_id,
                             similarity=match_result.similarity,
                             liveness_score=liveness_result.score,
@@ -266,6 +300,31 @@ class FacePipeline:
             })
 
         return results
+
+    def _enqueue_sync(
+        self,
+        record_id: str,
+        user_id: str,
+        similarity: float,
+        liveness_score: float,
+    ) -> None:
+        """Queue an attendance record for later sync (local autonomy: never blocks)."""
+        if self.sync_queue is None:
+            return
+        self.sync_queue.enqueue({
+            "id": record_id,
+            "user_id": user_id,
+            "timestamp": datetime.utcnow().isoformat(),
+            "similarity": similarity,
+            "liveness_score": liveness_score,
+            "device_id": self.config.sync_device_id,
+        })
+
+    def sync_now(self):
+        """Attempt one sync cycle. Returns a SyncResult or None when disabled."""
+        if self.sync_manager is None:
+            return None
+        return self.sync_manager.sync_once()
 
     def _dummy_detection(self, frame: np.ndarray) -> List[FaceDetection]:
         """Create a dummy detection for testing when no model is available."""

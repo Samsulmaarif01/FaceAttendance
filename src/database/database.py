@@ -6,7 +6,7 @@ import os
 import sqlite3
 import hashlib
 import secrets
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
 from datetime import datetime
 from contextlib import contextmanager
@@ -19,6 +19,9 @@ from cryptography.fernet import Fernet
 
 from src.security.keystore import FileKeyStore, KeyStore
 from src.security.audit import AuditLog
+
+if TYPE_CHECKING:
+    from src.sync.queue import SyncQueue
 
 
 @dataclass
@@ -80,6 +83,7 @@ class Database:
         encryption_key: Optional[bytes] = None,
         biohash_token: Optional[bytes] = None,
         audit_log: Optional[AuditLog] = None,
+        sync_queue: Optional["SyncQueue"] = None,
     ):
         self.db_path = db_path
         self.encryption_key = encryption_key or self._get_or_create_key()
@@ -87,11 +91,17 @@ class Database:
         self.biohash_token = biohash_token or secrets.token_bytes(32)
         self.biohasher = BioHasher()
         self.audit_log = audit_log
+        self.sync_queue = sync_queue
         self._init_db()
 
     def _audit(self, event_type: str, user_id: str = "", details: Optional[dict] = None) -> None:
         if self.audit_log is not None:
             self.audit_log.log(event_type, user_id=user_id, details=details or {})
+
+    def _enqueue_sync(self, event: dict) -> None:
+        """Queue a local event for sync (no-op when sync is disabled)."""
+        if self.sync_queue is not None:
+            self.sync_queue.enqueue(event)
 
     def _get_or_create_key(self) -> bytes:
         return KeyStore(FileKeyStore("data/db.key")).get_or_create_key()
@@ -155,6 +165,13 @@ class Database:
                 )
                 conn.commit()
                 self._audit("user_enrolled", user_id, {"name": name})
+                self._enqueue_sync({
+                    "id": secrets.token_urlsafe(16),
+                    "type": "user_enrolled",
+                    "user_id": user_id,
+                    "name": name,
+                    "timestamp": now,
+                })
                 return True
             except sqlite3.IntegrityError:
                 self._audit("user_enrollment_rejected", user_id, {"name": name, "reason": "duplicate"})
@@ -205,6 +222,12 @@ class Database:
             conn.commit()
             if cur.rowcount > 0:
                 self._audit("template_updated", user_id)
+                self._enqueue_sync({
+                    "id": secrets.token_urlsafe(16),
+                    "type": "template_updated",
+                    "user_id": user_id,
+                    "timestamp": now,
+                })
             return cur.rowcount > 0
 
     def delete_user(self, user_id: str) -> bool:
@@ -213,6 +236,12 @@ class Database:
             conn.commit()
             if cur.rowcount > 0:
                 self._audit("user_deleted", user_id)
+                self._enqueue_sync({
+                    "id": secrets.token_urlsafe(16),
+                    "type": "user_deleted",
+                    "user_id": user_id,
+                    "timestamp": datetime.utcnow().isoformat(),
+                })
             return cur.rowcount > 0
 
     def verify_user(self, user_id: str, embedding: np.ndarray) -> bool:
