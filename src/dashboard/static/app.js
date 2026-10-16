@@ -7,6 +7,7 @@ const photo = $("photo");
 const overlay = $("overlay");
 const capture = $("capture");
 const toastEl = $("toast");
+const stageEl = document.querySelector(".stage");
 
 let stream = null;
 let loopTimer = null;
@@ -132,6 +133,8 @@ async function startCamera() {
     video.hidden = false;
     $("video-msg").hidden = true;
     $("laser").hidden = false;
+    if (stageEl) stageEl.classList.remove("photo-mode");
+    setTracking(false);
     $("btn-camera").querySelector("span").textContent = "Hentikan Kamera";
     $("vf-sub").textContent = "Pengenalan langsung aktif";
     setStatus("Kamera aktif. Pengenalan langsung berjalan.", "ok");
@@ -148,6 +151,7 @@ function stopCamera() {
     stream = null;
   }
   if (photo.hidden) $("video-msg").hidden = false;
+  setTracking(false);
   $("btn-camera").querySelector("span").textContent = "Mulai Kamera";
   $("vf-sub").textContent = "Kamera belum aktif";
 }
@@ -168,6 +172,12 @@ function setFrameSize(w, h) {
   capture.height = h;
   overlay.width = w;
   overlay.height = h;
+}
+
+/* Toggle idle reticle vs. live tracking: the static scan reticle/laser only
+   shows when no face is being tracked (or the camera is off). */
+function setTracking(on) {
+  if (stageEl) stageEl.classList.toggle("tracking", !!on);
 }
 
 function drawFaces(faces) {
@@ -262,6 +272,7 @@ async function liveLoop() {
   try {
     const blob = await captureBlob();
     const data = await recognizeBlob(blob);
+    setTracking(data.count > 0);
     $("vf-elapsed").textContent = `AI ${data.elapsed_ms}ms`;
     $("latency-value").textContent = `${data.elapsed_ms}ms (Optimal)`;
     const matched = data.faces.filter((f) => f.match && f.match.matched);
@@ -432,6 +443,7 @@ async function showPhoto(file) {
   video.hidden = true;
   $("video-msg").hidden = true;
   $("laser").hidden = true;
+  if (stageEl) stageEl.classList.add("photo-mode");
   await photo.decode();
   setFrameSize(photo.naturalWidth, photo.naturalHeight);
   overlay.getContext("2d").clearRect(0, 0, frameW, frameH);
