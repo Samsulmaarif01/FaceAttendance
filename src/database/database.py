@@ -8,7 +8,7 @@ import hashlib
 import secrets
 from typing import List, Optional, Dict, Any, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from contextlib import contextmanager
 import json
 
@@ -44,6 +44,7 @@ class AttendanceRecord:
     liveness_score: float
     synced: bool = False
     device_id: str = ""
+    direction: str = "in"  # "in" (masuk) or "out" (pulang)
 
 
 class BioHasher:
@@ -137,6 +138,7 @@ class Database:
                     liveness_score REAL NOT NULL,
                     synced INTEGER DEFAULT 0,
                     device_id TEXT DEFAULT '',
+                    direction TEXT DEFAULT 'in',
                     FOREIGN KEY (user_id) REFERENCES users(id)
                 )
             """)
@@ -152,6 +154,10 @@ class Database:
             columns = [row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()]
             if "encrypted_embedding" not in columns:
                 conn.execute("ALTER TABLE users ADD COLUMN encrypted_embedding BLOB")
+            # Migration: older attendance tables lack the direction column.
+            att_columns = [row["name"] for row in conn.execute("PRAGMA table_info(attendance)").fetchall()]
+            if "direction" not in att_columns:
+                conn.execute("ALTER TABLE attendance ADD COLUMN direction TEXT DEFAULT 'in'")
             conn.commit()
 
     @contextmanager
@@ -298,23 +304,81 @@ class Database:
         similarity: float,
         liveness_score: float,
         device_id: str = "",
+        direction: str = "in",
     ) -> str:
         record_id = secrets.token_urlsafe(16)
         timestamp = datetime.utcnow().isoformat()
+        direction = "out" if str(direction).lower() in ("out", "pulang") else "in"
 
         with self._get_conn() as conn:
             conn.execute(
-                """INSERT INTO attendance (id, user_id, timestamp, similarity, liveness_score, device_id)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (record_id, user_id, timestamp, similarity, liveness_score, device_id),
+                """INSERT INTO attendance
+                       (id, user_id, timestamp, similarity, liveness_score, device_id, direction)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (record_id, user_id, timestamp, similarity, liveness_score, device_id, direction),
             )
             conn.commit()
         self._audit(
             "attendance_logged",
             user_id,
-            {"similarity": similarity, "liveness_score": liveness_score, "device_id": device_id},
+            {
+                "similarity": similarity,
+                "liveness_score": liveness_score,
+                "device_id": device_id,
+                "direction": direction,
+            },
         )
         return record_id
+
+    @staticmethod
+    def _local_day_bounds(now: Optional[datetime] = None) -> Tuple[str, str]:
+        """Return (start, end) ISO bounds of the local calendar day in stored UTC space."""
+        now = now or datetime.now()
+        local_midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        offset = now.astimezone().utcoffset() or timedelta(0)
+        start = local_midnight - offset
+        return start.isoformat(), (start + timedelta(days=1)).isoformat()
+
+    def has_attendance_today(
+        self,
+        user_id: str,
+        direction: str = "in",
+        now: Optional[datetime] = None,
+    ) -> bool:
+        """
+        True if the user already has a record of ``direction`` for the local day.
+
+        Used to guarantee at most one *masuk* (in) and one *pulang* (out) record
+        per user per day, regardless of how many times the face is recognised.
+        """
+        direction = "out" if str(direction).lower() in ("out", "pulang") else "in"
+        start, end = self._local_day_bounds(now)
+        with self._get_conn() as conn:
+            row = conn.execute(
+                """SELECT 1 FROM attendance
+                   WHERE user_id = ? AND direction = ? AND timestamp >= ? AND timestamp < ?
+                   LIMIT 1""",
+                (user_id, direction, start, end),
+            ).fetchone()
+        return row is not None
+
+    def get_today_status(self, now: Optional[datetime] = None) -> Dict[str, Dict[str, bool]]:
+        """Per-user check-in/out status for the local day (user_id -> {in, out})."""
+        start, end = self._local_day_bounds(now)
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                """SELECT DISTINCT user_id, direction FROM attendance
+                   WHERE timestamp >= ? AND timestamp < ?""",
+                (start, end),
+            ).fetchall()
+        status: Dict[str, Dict[str, bool]] = {}
+        for r in rows:
+            entry = status.setdefault(r["user_id"], {"in": False, "out": False})
+            if r["direction"] == "out":
+                entry["out"] = True
+            else:
+                entry["in"] = True
+        return status
 
     def get_unsynced_records(self, limit: int = 50) -> List[AttendanceRecord]:
         with self._get_conn() as conn:
@@ -331,6 +395,7 @@ class Database:
                     liveness_score=r["liveness_score"],
                     synced=bool(r["synced"]),
                     device_id=r["device_id"],
+                    direction=r["direction"] or "in",
                 )
                 for r in rows
             ]
@@ -350,6 +415,7 @@ class Database:
                     liveness_score=r["liveness_score"],
                     synced=bool(r["synced"]),
                     device_id=r["device_id"],
+                    direction=r["direction"] or "in",
                 )
                 for r in rows
             ]

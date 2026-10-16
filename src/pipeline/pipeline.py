@@ -275,13 +275,21 @@ class FacePipeline:
         self.camera.stop()
         cv2.destroyAllWindows()
 
-    def process_frame(self, frame: np.ndarray, log_attendance: bool = True) -> List[Dict]:
+    def process_frame(
+        self,
+        frame: np.ndarray,
+        log_attendance: bool = True,
+        direction: str = "in",
+    ) -> List[Dict]:
         """
         Process a single frame and return list of results for each detected face.
 
         Set ``log_attendance=False`` to recognize without writing attendance
-        (e.g. the web preview / uploaded-image path).
+        (e.g. the web preview / uploaded-image path). ``direction`` is ``"in"``
+        (masuk) or ``"out"`` (pulang); at most one record of each per user per
+        local day is written, so repeat recognitions are ignored.
         """
+        direction = "out" if str(direction).lower() in ("out", "pulang") else "in"
         self.frame_count += 1
 
         # Skip frames to save CPU
@@ -313,6 +321,8 @@ class FacePipeline:
             # Match against database
             match_result = None
             attendance_logged = False
+            attendance_duplicate = False
+            attendance_blocked = ""
             if liveness_result.is_live:
                 # Get user templates from database (this is a simplification)
                 # In reality, we'd need to store encrypted embeddings or use a different approach
@@ -326,22 +336,41 @@ class FacePipeline:
                     if match_result and match_result.matched:
                         # Update adaptive threshold
                         self.matcher.update_threshold(match_result.user_id, match_result.similarity)
-                        # Log attendance locally (works offline), throttled to one
-                        # record per user per `attendance_throttle_seconds` window.
-                        if log_attendance and self._should_log_attendance(match_result.user_id):
+                        uid = match_result.user_id
+                        # Rules (one *masuk* + one *pulang* per user per local day):
+                        #   - a repeat of the same direction is a duplicate
+                        #   - *pulang* requires a *masuk* earlier the same day
+                        if direction == "out" and not self.database.has_attendance_today(uid, "in"):
+                            attendance_blocked = "not_checked_in"
+                        elif self.database.has_attendance_today(uid, direction):
+                            attendance_duplicate = True
+                        elif log_attendance and self._should_log_attendance(uid, direction):
                             record_id = self.database.log_attendance(
-                                user_id=match_result.user_id,
+                                user_id=uid,
                                 similarity=match_result.similarity,
                                 liveness_score=liveness_result.score,
+                                direction=direction,
                             )
                             # Enqueue for sync (no-op when sync is disabled)
                             self._enqueue_sync(
                                 record_id=record_id,
-                                user_id=match_result.user_id,
+                                user_id=uid,
                                 similarity=match_result.similarity,
                                 liveness_score=liveness_result.score,
+                                direction=direction,
                             )
                             attendance_logged = True
+
+            if attendance_logged:
+                attendance_status = "logged"
+            elif attendance_blocked:
+                attendance_status = attendance_blocked
+            elif attendance_duplicate:
+                attendance_status = "duplicate"
+            elif match_result and match_result.matched:
+                attendance_status = "skipped"
+            else:
+                attendance_status = "no_match"
 
             results.append({
                 "detection": det,
@@ -351,16 +380,21 @@ class FacePipeline:
                 "aligned_face": aligned,
                 "face_roi": face_roi,
                 "attendance_logged": attendance_logged,
+                "attendance_duplicate": attendance_duplicate,
+                "attendance_blocked": attendance_blocked,
+                "attendance_status": attendance_status,
+                "direction": direction,
             })
 
         return results
 
-    def _should_log_attendance(self, user_id: str) -> bool:
-        """True if enough time passed since this user's last logged attendance."""
+    def _should_log_attendance(self, user_id: str, direction: str = "in") -> bool:
+        """True if enough time passed since this user's last log for ``direction``."""
+        key = f"{user_id}:{direction}"
         now = time.time()
-        last = self.last_recognition_time.get(user_id, 0.0)
+        last = self.last_recognition_time.get(key, 0.0)
         if now - last >= self.config.attendance_throttle_seconds:
-            self.last_recognition_time[user_id] = now
+            self.last_recognition_time[key] = now
             return True
         return False
 
@@ -370,6 +404,7 @@ class FacePipeline:
         user_id: str,
         similarity: float,
         liveness_score: float,
+        direction: str = "in",
     ) -> None:
         """Queue an attendance record for later sync (local autonomy: never blocks)."""
         if self.sync_queue is None:
@@ -381,6 +416,7 @@ class FacePipeline:
             "similarity": similarity,
             "liveness_score": liveness_score,
             "device_id": self.config.sync_device_id,
+            "direction": direction,
         })
 
     def sync_now(self):

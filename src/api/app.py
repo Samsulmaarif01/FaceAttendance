@@ -56,6 +56,9 @@ def _serialize_face(result: dict) -> dict:
         },
         "match": None,
         "attendance_logged": bool(result.get("attendance_logged", False)),
+        "attendance_duplicate": bool(result.get("attendance_duplicate", False)),
+        "attendance_status": result.get("attendance_status", "no_match"),
+        "direction": result.get("direction", "in"),
     }
     if match is not None:
         face["match"] = {
@@ -90,10 +93,16 @@ def create_app(
         }
 
     @app.post("/api/recognize", response_model=schemas.RecognizeResponse)
-    async def recognize(file: UploadFile = File(...), log: bool = True) -> dict:
+    async def recognize(
+        file: UploadFile = File(...),
+        log: bool = True,
+        direction: str = "in",
+    ) -> dict:
+        if direction not in ("in", "out"):
+            raise HTTPException(status_code=400, detail="direction must be 'in' or 'out'")
         frame = decode_image(await file.read())
         start = time.perf_counter()
-        results = pipe.process_frame(frame, log_attendance=log)
+        results = pipe.process_frame(frame, log_attendance=log, direction=direction)
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         faces = [_serialize_face(r) for r in results]
         return {"faces": faces, "count": len(faces), "elapsed_ms": round(elapsed_ms, 2)}
@@ -117,9 +126,11 @@ def create_app(
     def users() -> dict:
         people = pipe.database.get_all_users()
         summary = pipe.database.get_attendance_summary()
+        today = pipe.database.get_today_status()
         result = []
         for u in people:
             stats = summary.get(u.id, {})
+            status = today.get(u.id, {})
             result.append({
                 "id": u.id,
                 "name": u.name,
@@ -127,6 +138,8 @@ def create_app(
                 "created_at": u.created_at.isoformat(),
                 "attendance_count": int(stats.get("count", 0)),
                 "last_attendance": stats.get("last"),
+                "checked_in_today": bool(status.get("in", False)),
+                "checked_out_today": bool(status.get("out", False)),
             })
         return {"users": result, "count": len(result)}
 
@@ -148,6 +161,7 @@ def create_app(
                     "similarity": float(r.similarity),
                     "liveness_score": float(r.liveness_score),
                     "synced": bool(r.synced),
+                    "direction": r.direction,
                 }
                 for r in records
             ],

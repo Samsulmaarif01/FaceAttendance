@@ -14,6 +14,9 @@ let loopTimer = null;
 let frameW = 0;
 let frameH = 0;
 let userMap = {}; // id -> { name, count }
+let mode = "in"; // "in" (masuk) | "out" (pulang)
+const DIR = { in: "masuk", out: "pulang" };
+const DIR_TITLE = { in: "Masuk", out: "Pulang" };
 
 /* ── Small helpers ─────────────────────────────────────────── */
 function setStatus(msg, type) {
@@ -78,18 +81,34 @@ function showToast(title, sub, type) {
   toastTimer = setTimeout(() => { toastEl.hidden = true; }, 3500);
 }
 
-const lastToastAt = {};
-function maybeAttendanceToast(face) {
+const lastStatusByUser = {};
+
+/* Decide the notification from the server-side attendance outcome, deduped so
+   the 700 ms live loop does not repeat the same message. */
+function toastForFace(face) {
   const uid = face.match.user_id;
-  const now = Date.now();
-  if (face.attendance_logged === true) {
-    showToast("Absen berhasil", `${face.match.name} • ${new Date().toLocaleTimeString()}`, "");
-    lastToastAt[uid] = now;
+  const name = face.match.name;
+  const dir = DIR[face.direction] || "masuk";
+  const time = new Date().toLocaleTimeString();
+  let status = face.attendance_status;
+  if (status === undefined) {
+    // Older server: fall back to the boolean flags.
+    status = face.attendance_logged ? "logged" : face.attendance_duplicate ? "duplicate" : "skipped";
+  }
+
+  if (status === "logged") {
+    showToast(`Absen ${dir} berhasil`, `${name} • ${time}`, "");
+    lastStatusByUser[uid] = status;
     return;
   }
-  if (face.attendance_logged === undefined && now - (lastToastAt[uid] || 0) > 15000) {
-    showToast("Absen berhasil", `${face.match.name} • ${new Date().toLocaleTimeString()}`, "");
-    lastToastAt[uid] = now;
+  if (status === "duplicate" || status === "not_checked_in" || status === "skipped") {
+    if (lastStatusByUser[uid] === status) return;
+    lastStatusByUser[uid] = status;
+    if (status === "duplicate") {
+      showToast(`Sudah absen ${dir} hari ini`, `${name} tidak dicatat dua kali`, "info");
+    } else if (status === "not_checked_in") {
+      showToast("Belum presensi masuk", `${name} harus absen masuk dulu sebelum pulang`, "err");
+    }
   }
 }
 
@@ -239,10 +258,10 @@ function drawRegisteredLabel(name) {
   ctx.fillText(label, 6, boxH / 2);
 }
 
-async function recognizeBlob(blob) {
+async function recognizeBlob(blob, direction) {
   const fd = new FormData();
   fd.append("file", blob, "frame.jpg");
-  const data = await fetchJSON("/api/recognize", { method: "POST", body: fd });
+  const data = await fetchJSON(`/api/recognize?direction=${direction || "in"}`, { method: "POST", body: fd });
   drawFaces(data.faces);
   return data;
 }
@@ -252,6 +271,9 @@ function updateMatchCard(face) {
   const m = face.match;
   const name = m.name || m.user_id;
   const info = userMap[m.user_id] || {};
+  const dir = DIR[face.direction] || "masuk";
+  const dirTitle = DIR_TITLE[face.direction] || "Masuk";
+  const status = face.attendance_status || (face.attendance_logged ? "logged" : "skipped");
 
   $("match-empty").hidden = true;
   $("match-body").hidden = false;
@@ -260,40 +282,55 @@ function updateMatchCard(face) {
   $("match-name").textContent = name;
   $("match-role").textContent = "Pengguna terverifikasi";
   $("match-uid").textContent = `NIK: ${m.user_id}`;
-  $("match-att").textContent = info.count ? `Hadir ${info.count}×` : "Kehadiran baru";
   $("match-similarity").textContent = `${(m.similarity * 100).toFixed(1)}% Cocok`;
   $("match-when").textContent = "Baru saja";
 
-  const logged = face.attendance_logged !== false;
-  $("match-state-chip").innerHTML = `<span class="dot pulse"></span>${logged ? "Presensi Berhasil" : "Sudah Tercatat"}`;
+  const chipText = {
+    logged: `Presensi ${dirTitle} Berhasil`,
+    duplicate: `Sudah Absen ${dirTitle} Hari Ini`,
+    not_checked_in: "Belum Presensi Masuk",
+    skipped: "Terverifikasi",
+  }[status] || "Terverifikasi";
+  $("match-state-chip").innerHTML = `<span class="dot pulse"></span>${chipText}`;
 
+  const attText = {
+    logged: `Absen ${dir} tercatat`,
+    duplicate: `Sudah ${dir} hari ini`,
+    not_checked_in: "Wajib absen masuk dulu",
+  }[status] || (info.count ? `Hadir ${info.count}×` : "Kehadiran baru");
+  $("match-att").textContent = attText;
+
+  const greetMsg = {
+    logged: `Presensi ${dir} kamu berhasil terdata di sistem lokal. Have a wonderful and productive day!`,
+    duplicate: `Presensi ${dir} hari ini sudah tercatat sebelumnya — tidak dicatat dua kali.`,
+    not_checked_in: "Belum ada presensi masuk hari ini, jadi presensi pulang belum bisa dicatat.",
+    skipped: "Wajah terverifikasi (mode pengenalan tanpa pencatatan absensi).",
+  }[status] || "Wajah terverifikasi.";
   $("greet-name").textContent = `${greetWord()}, ${String(name).split(" ")[0]}!`;
-  $("greet-msg").textContent = logged
-    ? "Presensi kamu berhasil terdata di sistem lokal. Have a wonderful and productive day!"
-    : "Presensi untuk pengguna ini sudah tercatat pada jendela waktu ini (throttled).";
+  $("greet-msg").textContent = greetMsg;
 
   $("match-time").textContent = new Date().toLocaleTimeString("id-ID", { hour12: false });
-  $("match-time-tag").textContent = logged ? "Baru dicatat" : "Sudah tercatat";
+  $("match-time-tag").textContent = status === "logged" ? `Baru dicatat (${dir})` : status === "duplicate" ? "Sudah tercatat" : "Tidak dicatat";
   $("match-score").textContent = m.similarity.toFixed(3);
   $("match-id").textContent = m.user_id;
   $("match-conf").textContent = `Conf ${(face.confidence || 0).toFixed(2)}`;
-  $("match-sync").textContent = "Lokal";
-  $("match-sync-id").textContent = "status: unsynced";
+  $("match-sync").textContent = status === "logged" ? "Lokal" : "—";
+  $("match-sync-id").textContent = status === "logged" ? "status: unsynced" : "tidak ada catatan baru";
 }
 
 async function liveLoop() {
   if (!$("chk-live").checked || !stream || !photo.hidden) return;
   try {
     const blob = await captureBlob();
-    const data = await recognizeBlob(blob);
+    const data = await recognizeBlob(blob, mode);
     setTracking(data.count > 0);
     $("vf-elapsed").textContent = `AI ${data.elapsed_ms}ms`;
     $("latency-value").textContent = `${data.elapsed_ms}ms (Optimal)`;
     const matched = data.faces.filter((f) => f.match && f.match.matched);
     if (matched.length) {
       const names = matched.map((f) => f.match.name);
-      setStatus(`Terdeteksi: ${names.join(", ")} (${data.elapsed_ms} ms)`, "ok");
-      for (const f of matched) maybeAttendanceToast(f);
+      setStatus(`Terdeteksi (${DIR[matched[0].direction] || "masuk"}): ${names.join(", ")} (${data.elapsed_ms} ms)`, "ok");
+      for (const f of matched) toastForFace(f);
       updateMatchCard(matched[0]);
       refreshAttendance();
       refreshStats();
@@ -338,15 +375,19 @@ async function refreshUsers() {
     $("users-count").textContent = `(${data.count})`;
     const tbody = $("users").querySelector("tbody");
     if (!data.users.length) {
-      tbody.innerHTML = `<tr><td class="table-empty" colspan="4">Belum ada pengguna terdaftar.</td></tr>`;
+      tbody.innerHTML = `<tr><td class="table-empty" colspan="5">Belum ada pengguna terdaftar.</td></tr>`;
       return;
     }
     tbody.innerHTML = data.users
       .map((u) => {
         const last = u.last_attendance ? fmtTime(u.last_attendance) : "—";
+        const today = (u.checked_in_today || u.checked_out_today)
+          ? (u.checked_in_today ? dirBadge("in") : "") + (u.checked_out_today ? dirBadge("out") : "")
+          : `<span class="muted tiny">belum</span>`;
         return `<tr>` +
           `<td class="mono">${esc(u.id)}</td>` +
           `<td><span class="avatar-cell">${esc(initials(u.name))}</span>${esc(u.name)}</td>` +
+          `<td class="today-cell">${today}</td>` +
           `<td>${last}</td>` +
           `<td><button class="btn danger icon-only" data-delete="${esc(u.id)}" title="Hapus pengguna">` +
           `<svg class="icon sm"><use href="#i-trash"/></svg></button></td>` +
@@ -376,6 +417,12 @@ function statusBadge(synced) {
     : `<span class="chip"><span class="dot" style="background:var(--outline)"></span>Unsynced</span>`;
 }
 
+function dirBadge(dir) {
+  return dir === "out"
+    ? `<span class="chip"><span class="dot" style="background:var(--secondary)"></span>Pulang</span>`
+    : `<span class="chip primary"><span class="dot"></span>Masuk</span>`;
+}
+
 async function refreshAttendance() {
   try {
     const data = await fetchJSON("/api/attendance?limit=50");
@@ -384,9 +431,9 @@ async function refreshAttendance() {
     const tbody = $("attendance").querySelector("tbody");
     tbody.innerHTML = data.records.length
       ? data.records
-          .map((r) => `<tr><td class="mono">${esc(r.user_id)}</td><td>${esc((userMap[r.user_id] || {}).name || "—")}</td><td>${fmtTime(r.timestamp)}</td><td>${r.similarity.toFixed(3)}</td><td>${r.synced ? "yes" : "no"}</td></tr>`)
+          .map((r) => `<tr><td class="mono">${esc(r.user_id)}</td><td>${esc((userMap[r.user_id] || {}).name || "—")}</td><td>${dirBadge(r.direction)}</td><td>${fmtTime(r.timestamp)}</td><td>${r.similarity.toFixed(3)}</td><td>${r.synced ? "yes" : "no"}</td></tr>`)
           .join("")
-      : `<tr><td class="table-empty" colspan="5">Belum ada catatan presensi.</td></tr>`;
+      : `<tr><td class="table-empty" colspan="6">Belum ada catatan presensi.</td></tr>`;
 
     const feed = $("feed");
     feed.innerHTML = data.records.length
@@ -396,10 +443,11 @@ async function refreshAttendance() {
             return `<div class="feed-row">` +
               `<div class="feed-left">` +
               `<span class="feed-avatar">${esc(initials(name))}</span>` +
-              `<div class="feed-info"><span class="strong">${esc(name)}</span><span class="muted tiny">${esc(r.user_id)} • Presensi Pengenalan Wajah</span></div>` +
+              `<div class="feed-info"><span class="strong">${esc(name)}</span><span class="muted tiny">${esc(r.user_id)} • Presensi ${esc(DIR[r.direction] || "masuk")}</span></div>` +
               `</div>` +
               `<div class="feed-right">` +
               `<div class="feed-time"><span class="mono strong">${fmtTime(r.timestamp)}</span><span class="outline tiny">Akurasi ${(r.similarity * 100).toFixed(1)}%</span></div>` +
+              dirBadge(r.direction) +
               statusBadge(r.synced) +
               `</div>` +
               `</div>`;
@@ -531,8 +579,18 @@ function wire() {
 
   const inBtn = $("btn-mode-in");
   const outBtn = $("btn-mode-out");
-  inBtn.addEventListener("click", () => { inBtn.classList.add("active"); outBtn.classList.remove("active"); setStatus("Mode: Presensi Masuk.", "info"); });
-  outBtn.addEventListener("click", () => { outBtn.classList.add("active"); inBtn.classList.remove("active"); setStatus("Mode: Presensi Pulang.", "info"); });
+  const setMode = (next) => {
+    mode = next;
+    inBtn.classList.toggle("active", next === "in");
+    outBtn.classList.toggle("active", next === "out");
+    Object.keys(lastStatusByUser).forEach((k) => delete lastStatusByUser[k]);
+    $("vf-hint").textContent = next === "in"
+      ? "Posisikan Wajah — Mode Presensi Masuk"
+      : "Posisikan Wajah — Mode Presensi Pulang";
+    setStatus(`Mode: Presensi ${next === "in" ? "Masuk" : "Pulang"}.`, "info");
+  };
+  inBtn.addEventListener("click", () => setMode("in"));
+  outBtn.addEventListener("click", () => setMode("out"));
   window.addEventListener("keydown", (e) => {
     if (e.key === "F1") { e.preventDefault(); inBtn.click(); }
     else if (e.key === "F2") { e.preventDefault(); outBtn.click(); }

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>VeriFace AI — Presensi Pengenalan Wajah</title>
   <script>try { if (localStorage.getItem("vf-theme") === "light") document.documentElement.classList.add("light"); } catch (e) {}</script>
-  <link rel="stylesheet" href="/static/style.css?v=7" />
+  <link rel="stylesheet" href="/static/style.css?v=8" />
 </head>
 <body>
   <!-- Inline icon sprite (offline, no icon font needed) -->
@@ -184,8 +184,8 @@
             <div class="tips-bar">
               <span class="tips-icon"><svg class="icon"><use href="#i-lamp"/></svg></span>
               <div>
-                <p class="strong">Lepaskan kacamata hitam atau topi</p>
-                <p class="muted tiny">Pastikan pencahayaan merata untuk mempercepat durasi pengenalan biometrik.</p>
+                <p class="strong">Presensi masuk &amp; pulang masing-masing sekali per hari</p>
+                <p class="muted tiny">Absen pulang hanya bisa setelah absen masuk hari ini. Gunakan tombol Masuk/Pulang (F1/F2) untuk memilih jenis.</p>
               </div>
             </div>
 
@@ -301,7 +301,7 @@
             <div class="panel-title"><svg class="icon primary"><use href="#i-history"/></svg><h3>Catatan Presensi <span class="muted tiny" id="att-count"></span></h3></div>
           </div>
           <div class="table-wrap">
-            <table id="attendance"><thead><tr><th>User</th><th>Nama</th><th>Waktu</th><th>Similarity</th><th>Synced</th></tr></thead><tbody></tbody></table>
+            <table id="attendance"><thead><tr><th>User</th><th>Nama</th><th>Jenis</th><th>Waktu</th><th>Similarity</th><th>Synced</th></tr></thead><tbody></tbody></table>
           </div>
         </div>
       </section>
@@ -335,7 +335,7 @@
             <div class="panel-title"><svg class="icon primary"><use href="#i-users"/></svg><h3>Daftar Pengguna <span class="muted tiny" id="users-count"></span></h3></div>
           </div>
           <div class="table-wrap">
-            <table id="users"><thead><tr><th>ID</th><th>Nama</th><th>Terakhir Hadir</th><th>Aksi</th></tr></thead><tbody></tbody></table>
+            <table id="users"><thead><tr><th>ID</th><th>Nama</th><th>Hari Ini</th><th>Terakhir Hadir</th><th>Aksi</th></tr></thead><tbody></tbody></table>
           </div>
         </div>
       </section>
@@ -380,6 +380,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=7"></script>
+  <script src="/static/app.js?v=8"></script>
 </body>
 </html>

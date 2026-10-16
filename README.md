@@ -266,10 +266,12 @@ and **Pengaturan Kamera/Sistem**.
   `"auto" | "scrfd" | "yunet" | "dummy"`.
 - **Enroll captured face**: registers the current webcam frame (needs camera + name).
 - **Register from image…**: enrolls a face from a photo **only** — it never writes attendance.
-- **Attendance is throttled**: at most one record per user per `attendance_throttle_seconds`
-  window (default 60s); `POST /api/recognize?log=false` recognizes without recording.
-- **Success popup**: a toast ("Absen berhasil", name + time) appears whenever a new
-  attendance record is written; `recognize` returns `attendance_logged` per face.
+- **One check-in + one check-out per day**: `POST /api/recognize?direction=in|out` (default `in`).
+  A repeat of the same direction the same day is ignored (`attendance_status="duplicate"`), and
+  `direction=out` is blocked until the user has checked in (`attendance_status="not_checked_in"`);
+  `?log=false` recognizes without recording. Each face also reports `attendance_logged`.
+- **Success popup**: a toast ("Absen masuk/pulang berhasil", name + time) appears when a record
+  is written; repeats/blocked cases show a distinct info/error toast instead.
 - **Delete user** / **Clear attendance**: buttons in the dashboard (`DELETE /api/users/{id}`,
   `DELETE /api/attendance`).
 - **Theme**: a sun/moon toggle in the header switches dark ⇄ light ("white mode"); the

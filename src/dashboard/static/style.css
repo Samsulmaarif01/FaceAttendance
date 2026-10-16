@@ -278,6 +278,7 @@ th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--bor
 th { color: var(--on-surface-variant); font-weight: 500; position: sticky; top: 0; background: var(--surface-container); font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
 tbody tr:hover { background: var(--surface-low); }
 .avatar-cell { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%; background: var(--surface-highest); color: var(--primary); font-size: 11px; font-weight: 700; margin-right: 8px; }
+.today-cell { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .table-empty { color: var(--outline); text-align: center; }
 
 /* ── Enroll row ──────────────────────────────────────────── */

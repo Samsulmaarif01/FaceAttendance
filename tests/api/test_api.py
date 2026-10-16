@@ -130,6 +130,43 @@ class TestAttendanceAndStats:
         assert user["last_attendance"] is not None
 
 
+class TestAttendanceDirection:
+    def test_checkout_without_checkin_is_blocked(self, client):
+        client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(6))
+        face = client.post("/api/recognize?direction=out", files=_files(6)).json()["faces"][0]
+        assert face["match"]["matched"] is True
+        assert face["attendance_logged"] is False
+        assert face["attendance_status"] == "not_checked_in"
+        assert client.get("/api/stats").json()["total"] == 0
+
+    def test_checkin_then_checkout_records_both(self, client):
+        client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(6))
+        assert client.post("/api/recognize?direction=in", files=_files(6)).json()["faces"][0]["attendance_status"] == "logged"
+        assert client.post("/api/recognize?direction=out", files=_files(6)).json()["faces"][0]["attendance_status"] == "logged"
+        records = client.get("/api/attendance").json()["records"]
+        assert sorted(r["direction"] for r in records) == ["in", "out"]
+        assert client.get("/api/stats").json()["total"] == 2
+
+    def test_repeat_direction_same_day_is_duplicate(self, client):
+        client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(6))
+        client.post("/api/recognize?direction=in", files=_files(6))
+        face = client.post("/api/recognize?direction=in", files=_files(6)).json()["faces"][0]
+        assert face["attendance_logged"] is False
+        assert face["attendance_status"] == "duplicate"
+        assert client.get("/api/stats").json()["total"] == 1
+
+    def test_invalid_direction_is_rejected(self, client):
+        assert client.post("/api/recognize?direction=sideways", files=_files(6)).status_code == 400
+
+    def test_users_report_today_status(self, client):
+        client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(6))
+        assert client.get("/api/users").json()["users"][0]["checked_in_today"] is False
+        client.post("/api/recognize?direction=in", files=_files(6))
+        user = client.get("/api/users").json()["users"][0]
+        assert user["checked_in_today"] is True
+        assert user["checked_out_today"] is False
+
+
 class TestAttendanceManagement:
     def test_clear_attendance(self, client):
         client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(7))

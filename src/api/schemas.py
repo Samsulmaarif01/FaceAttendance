@@ -41,6 +41,9 @@ class FaceResult(BaseModel):
     liveness: LivenessInfo
     match: Optional[MatchInfo] = None
     attendance_logged: bool = False
+    attendance_duplicate: bool = False
+    attendance_status: str = "no_match"
+    direction: str = "in"
 
 
 class RecognizeResponse(BaseModel):
@@ -63,6 +66,8 @@ class UserInfo(BaseModel):
     created_at: str
     attendance_count: int = 0
     last_attendance: Optional[str] = None
+    checked_in_today: bool = False
+    checked_out_today: bool = False
 
 
 class UsersResponse(BaseModel):
@@ -83,6 +88,7 @@ class AttendanceInfo(BaseModel):
     similarity: float
     liveness_score: float
     synced: bool
+    direction: str = "in"
 
 
 class AttendanceResponse(BaseModel):
