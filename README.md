@@ -12,7 +12,7 @@ Phases 1–6 of the roadmap are implemented (see `docs/system_design.md` §13.8)
 - ✅ **Phase 4 – Offline-First**: LWW-Element-Set CRDT, exponential backoff, zstd delta compression, local autonomy
 - ✅ **Phase 5 – Scalability**: vector index (numpy + optional FAISS), hierarchical coarse→fine matching, per-site sharding, management plane
 - ✅ **Phase 6 – UX**: local browser UI (webcam), self-service enrollment, attendance dashboard, demo mode without ONNX
-- ⚠️ **Missing**: ONNX models, real mTLS socket wiring, FAISS installed (index falls back to numpy)
+- ⚠️ **Missing**: ONNX models, real mTLS socket wiring, FAISS installed (index falls back to numpy), physical IoT gate hardware (API side ready — see [Mode Gate](#aturan-presensi--mode-gate-iot))
 
 ## Project Overview
 
@@ -44,10 +44,12 @@ graph TD
 - **Local web UI** – browser dashboard (`src/dashboard/`) served by the FastAPI app in `src/api/`; webcam capture + overlay, no Docker
 - **Real face tracking (demo)** – when no SCRFD model is present the pipeline uses a vendored **YuNet** detector (`src/detection/yunet.py`) to locate faces, instead of a fixed dummy box
 - **Self-service enrollment** – enroll from the browser webcam or **from a photo** (`POST /api/enroll`); the photo path is enroll-only and never writes attendance
-- **Live recognition + attendance** – `POST /api/recognize` draws bounding boxes/labels and logs attendance, **throttled to one record per user per window** (`PipelineConfig.attendance_throttle_seconds`, default 60s). `?log=false` recognizes without recording
+- **Live recognition + attendance** – `POST /api/recognize` draws bounding boxes/labels and logs attendance, **throttled per `user:direction`** (`PipelineConfig.attendance_throttle_seconds`, default 60s). `?log=false` recognizes without recording, `?direction=in|out` picks masuk/pulang, `?gate=true` switches to **IoT gate mode**
+- **Attendance rules** – presensi berurutan **masuk → pulang → masuk → pulang** per hari lokal (lihat [Aturan Presensi & Mode Gate](#aturan-presensi--mode-gate-iot))
 - **Manage data** – delete a user (`DELETE /api/users/{id}`), clear attendance (`DELETE /api/attendance`), per-user last-attendance in `/api/users`
 - **Demo mode** – runs without ONNX recognition models using `SyntheticEmbeddingModel` (`PipelineConfig.demo_mode` / `create_demo_config`)
 - **API surface** – `/api/health`, `/api/recognize`, `/api/enroll`, `/api/users`, `/api/attendance`, `/api/stats`, `/api/sync` (+ `DELETE` variants)
+- **Gate (IoT) mode** – `?gate=true` memberi akses pada setiap wajah terdaftar dan tetap mencatat *pulang* walau belum absen *masuk*
 
 <details>
 <summary>Fase 5: Scalability (implemented)</summary>
@@ -269,14 +271,16 @@ and **Pengaturan Kamera/Sistem**.
 - **Nothing is recorded until a mode is chosen**: the live scan recognises faces but writes
   attendance only after you press **Presensi Masuk** or **Presensi Pulang** (F1/F2). No mode
   selected ⇒ `?log=false`, so the "pulang" button can never silently write a "masuk".
-- **One check-in + one check-out per day**: `POST /api/recognize?direction=in|out` (default `in`).
-  A repeat of the same direction the same day is ignored (`attendance_status="duplicate"`), and
-  `direction=out` is blocked until the user has checked in (`attendance_status="not_checked_in"`);
-  `?log=false` recognizes without recording. Each face also reports `attendance_logged`.
-- **Success popup**: a toast ("Absen masuk/pulang berhasil", name + time) appears when a record
-  is written; a repeat shows an amber **"Anda sudah presensi masuk hari ini (08:14)"** marker
-  (`attendance_duplicate_at`), and checkout-before-checkin shows a red **"Anda belum melakukan
-  presensi masuk"** alert. The verification card repeats the reason persistently (chip + viewfinder line).
+- **Aturan presensi berurutan**: `POST /api/recognize?direction=in|out` (default `in`) mengikuti
+  urutan **masuk → pulang → masuk → pulang** dalam satu hari lokal — lihat
+  [Aturan Presensi & Mode Gate](#aturan-presensi--mode-gate-iot).
+- **Success popup**: toast hijau **"Absen masuk/pulang berhasil"** saat record ditulis; absen
+  berulang menampilkan toast hijau centang **"Sudah absen masuk"** (`attendance_status="duplicate"`,
+  beserta jamnya dari `attendance_duplicate_at`), sedangkan pulang tanpa absen masuk menampilkan
+  toast merah **"Anda belum melakukan presensi masuk"**. Kartu verifikasi mengulang alasannya
+  secara permanen (chip + baris pada viewfinder).
+- **Pesan tidak diulang selama orang tetap di frame**: status per-user hanya diumumkan lagi ketika
+  orang benar-benar **keluar lalu masuk lagi** (`presentUsers` + `PRESENCE_GRACE_MS` 3 detik).
 - **Delete user** / **Clear attendance**: buttons in the dashboard (`DELETE /api/users/{id}`,
   `DELETE /api/attendance`).
 - **Theme**: a sun/moon toggle in the header switches dark ⇄ light ("white mode"); the
@@ -285,7 +289,66 @@ and **Pengaturan Kamera/Sistem**.
 - Demo mode tests the **flow/UI**, not real face accuracy — recognition uses synthetic
   embeddings, so recognize/enroll round-trips match best on the same image. Real accuracy
   needs `.onnx` recognition models in `models/` and `--real`.
+- **Mode Gate (IoT)**: saklar di *Pengaturan* melonggarkan aturan pairing absensi sehingga
+  keluar tetap dicatat dan akses selalu diberikan ke wajah terdaftar — lihat
+  [Aturan Presensi & Mode Gate](#aturan-presensi--mode-gate-iot).
 - Tests: `python -X utf8 -m pytest tests/api tests/recognition tests/detection -v`
+
+### Aturan Presensi & Mode Gate (IoT)
+
+#### 1. Aturan presensi (mode absen)
+
+Presensi **berselang-seling** dalam satu hari lokal — ditentukan oleh **record terakhir** user
+(`Database.get_today_last_direction`):
+
+| Aksi | Record terakhir | Hasil |
+|---|---|---|
+| Absen **Masuk** | — (belum ada) | ✅ tercatat |
+| Absen **Masuk** lagi | `in` (belum pulang) | ✅ **"Sudah absen"** — hijau centang, **tidak** dicatat ulang |
+| Absen **Pulang** | `in` | ✅ tercatat |
+| Absen **Pulang** lagi | `out` | ✅ **"Sudah absen"** — tidak dicatat ulang |
+| Absen **Masuk** lagi | `out` (sudah pulang) | ✅ **boleh**, tercatat — siklus baru |
+| Absen **Pulang** | — (belum pernah masuk) | ⛔ merah **"Anda belum melakukan presensi masuk"**, tidak dicatat |
+
+`attendance_status` yang dikembalikan: `logged` (tercatat), `duplicate` (sudah absen),
+`not_checked_in` (pulang tanpa masuk), `skipped`, `no_match`.
+
+#### 2. Mode Gate (IoT)
+
+Satu face ID dipakai bersama untuk **absensi dan akses gate**. Aktifkan lewat
+*Pengaturan → Mode Gate*, atau panggil API secara langsung:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/recognize?direction=out&gate=true" -F file=@wajah.jpg
+```
+
+```python
+results = pipeline.process_frame(frame, direction="out", gate=True)
+```
+
+Saat `gate=True`, aturan pairing absensi **dilonggarkan**:
+
+| Skenario | Mode Absen | Mode Gate |
+|---|---|---|
+| Masuk | `logged` | `logged` + `gate_granted: true` |
+| Masuk lagi | `duplicate` | `duplicate` + **`gate_granted: true`** (akses tetap diberikan) |
+| **Pulang tanpa absen masuk** | ⛔ `not_checked_in` | ✅ `logged` + **`gate_granted: true`** |
+| Wajah tidak terdaftar | — | `gate_granted: false` |
+
+> **Prinsip:** keluar dari gedung **tidak boleh** diblokir oleh aturan absensi. Field
+> `gate_granted` pada respons adalah sinyal untuk membuka kunci (relay / ESP32 / solenoid).
+> Gate selalu meminta `gate=true`, kios absen memakai default `gate=false`.
+
+#### 3. Detail penting
+
+- **Throttle** `attendance_throttle_seconds` (default 60 s) dibatasi per `user:direction`, dan
+  key arah sebaliknya dihapus setiap kali record berhasil ditulis — jadi transisi
+  masuk → pulang → masuk tidak pernah tertunda.
+- **Menghapus riwayat** (`DELETE /api/attendance` / `DELETE /api/users/{id}`) juga menghapus
+  state throttle di memory (`FacePipeline.reset_attendance_throttle()`), sehingga user bisa
+  langsung absen lagi tanpa menunggu.
+- **Tidak ada yang dicatat sebelum mode dipilih**: tanpa mode Masuk/Pulang, live scan hanya
+  mengenali wajah (`?log=false`).
 
 ### Development Guidelines
 
@@ -321,12 +384,16 @@ and **Pengaturan Kamera/Sistem**.
    - Self-service enrollment (`POST /api/enroll`)
    - Web dashboard (`src/dashboard/`, served by `src/api/`)
    - Demo mode without ONNX recognition models (`SyntheticEmbeddingModel`)
+   - Aturan presensi berurutan (masuk → pulang → masuk) + **Mode Gate (IoT)**
    - Tests: `python -X utf8 -m pytest tests/api tests/recognition tests/detection -v`
 
 6. **Phase 7**: Production deployment
    - Optional Docker containers
    - System monitoring
    - Automated testing
+   - **Integrasi IoT gate**: perangkat gate (relay/ESP32) memanggil
+     `POST /api/recognize?direction=in|out&gate=true` dan membuka kunci bila
+     `gate_granted == true` — satu face ID untuk absensi sekaligus akses
 
 ### Architecture Decisions (Phase 1)
 
@@ -355,7 +422,8 @@ and **Pengaturan Kamera/Sistem**.
 1. Download ONNX models from official sources and validate real accuracy (`--real`)
 2. Implement proper liveness detection (MiniFASNet)
 3. Add proper matching with FAISS vector search
-4. Package for production (systemd/service scripts; optional Docker) and add CI/CD
+4. **Integrate the IoT gate** with the face pipeline via `?gate=true` / `gate_granted`
+5. Package for production (systemd/service scripts; optional Docker) and add CI/CD
 
 ### Getting Started
 
