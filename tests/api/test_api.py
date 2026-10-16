@@ -21,6 +21,7 @@ def _jpg(seed: int, size=(480, 640)) -> bytes:
 @pytest.fixture
 def client(tmp_path):
     config = create_demo_config(
+        detector_backend="dummy",
         database_path=str(tmp_path / "test.db"),
         audit_log_path=str(tmp_path / "audit.log"),
         database_encryption_key=Fernet.generate_key(),
