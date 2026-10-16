@@ -107,6 +107,48 @@ class TestAttendanceAndStats:
         assert records["count"] == 1
         assert records["records"][0]["user_id"] == "a1"
 
+    def test_recognize_without_log_writes_nothing(self, client):
+        client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(6))
+        res = client.post("/api/recognize?log=false", files=_files(6))
+        assert res.status_code == 200
+        assert res.json()["faces"][0]["match"]["matched"] is True
+        assert client.get("/api/stats").json()["total"] == 0
+
+    def test_attendance_is_throttled_per_user(self, client):
+        client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(6))
+        client.post("/api/recognize", files=_files(6))
+        client.post("/api/recognize", files=_files(6))
+        assert client.get("/api/stats").json()["total"] == 1
+
+    def test_users_report_last_attendance(self, client):
+        client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(6))
+        client.post("/api/recognize", files=_files(6))
+        user = client.get("/api/users").json()["users"][0]
+        assert user["attendance_count"] == 1
+        assert user["last_attendance"] is not None
+
+
+class TestAttendanceManagement:
+    def test_clear_attendance(self, client):
+        client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(7))
+        client.post("/api/recognize", files=_files(7))
+        assert client.get("/api/stats").json()["total"] == 1
+
+        res = client.delete("/api/attendance")
+        assert res.status_code == 200
+        assert res.json()["deleted"] == 1
+        assert client.get("/api/stats").json()["total"] == 0
+
+    def test_delete_user(self, client):
+        client.post("/api/enroll", data={"name": "Bob", "user_id": "b1"}, files=_files(8))
+        res = client.delete("/api/users/b1")
+        assert res.status_code == 200
+        assert res.json() == {"success": True, "id": "b1", "deleted": None}
+        assert client.get("/api/users").json()["count"] == 0
+
+    def test_delete_missing_user_is_404(self, client):
+        assert client.delete("/api/users/nope").status_code == 404
+
 
 class TestSyncAndDashboard:
     def test_sync_disabled_when_not_configured(self, client):
