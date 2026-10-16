@@ -52,6 +52,20 @@ function greetWord() {
   return "Selamat Malam";
 }
 
+/* ── Theme (dark / light) ──────────────────────────────────── */
+function currentTheme() {
+  return document.documentElement.classList.contains("light") ? "light" : "dark";
+}
+
+function applyTheme(mode) {
+  document.documentElement.classList.toggle("light", mode === "light");
+  try { localStorage.setItem("vf-theme", mode); } catch (_) {}
+  const use = document.querySelector("#btn-theme use");
+  if (use) use.setAttribute("href", mode === "light" ? "#i-sun" : "#i-moon");
+  const btn = $("btn-theme");
+  if (btn) btn.title = mode === "light" ? "Aktifkan tema gelap" : "Aktifkan tema terang";
+}
+
 /* ── Toast ─────────────────────────────────────────────────── */
 let toastTimer = null;
 function showToast(title, sub, type) {
@@ -495,6 +509,8 @@ async function onUpload(file) {
 function wire() {
   wireNav();
   showSection("presensi");
+  applyTheme(currentTheme());
+  $("btn-theme").addEventListener("click", () => applyTheme(currentTheme() === "light" ? "dark" : "light"));
 
   $("btn-camera").addEventListener("click", () => {
     if (stream) { stopCamera(); return; }

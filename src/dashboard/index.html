@@ -4,7 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>VeriFace AI — Presensi Pengenalan Wajah</title>
-  <link rel="stylesheet" href="/static/style.css?v=6" />
+  <script>try { if (localStorage.getItem("vf-theme") === "light") document.documentElement.classList.add("light"); } catch (e) {}</script>
+  <link rel="stylesheet" href="/static/style.css?v=7" />
 </head>
 <body>
   <!-- Inline icon sprite (offline, no icon font needed) -->
@@ -31,6 +32,8 @@
     <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></symbol>
     <symbol id="i-badge" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2.2"/><path d="M5.5 17a3.6 3.6 0 0 1 7 0"/><path d="M15 10h4M15 14h4"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a7 7 0 1 0 10.5 10.5Z"/></symbol>
   </svg>
 
   <header class="topbar">
@@ -47,6 +50,7 @@
         <button class="topnav-link" data-section="pengaturan">Pengaturan</button>
       </nav>
       <div class="topbar-right">
+        <button class="icon-btn" id="btn-theme" title="Ganti tema terang / gelap" aria-label="Ganti tema"><svg class="icon sm"><use href="#i-moon"/></svg></button>
         <div class="pill pill-clock">
           <svg class="icon sm"><use href="#i-clock"/></svg>
           <span class="mono strong" id="clock-time">--:--:--</span>
@@ -376,6 +380,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=6"></script>
+  <script src="/static/app.js?v=7"></script>
 </body>
 </html>

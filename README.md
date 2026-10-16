@@ -272,6 +272,8 @@ and **Pengaturan Kamera/Sistem**.
   attendance record is written; `recognize` returns `attendance_logged` per face.
 - **Delete user** / **Clear attendance**: buttons in the dashboard (`DELETE /api/users/{id}`,
   `DELETE /api/attendance`).
+- **Theme**: a sun/moon toggle in the header switches dark ⇄ light ("white mode"); the
+  choice is saved in `localStorage` (`vf-theme`) and the camera viewport stays dark.
 - Webcam requires `localhost`/HTTPS (a secure context); `127.0.0.1` is fine.
 - Demo mode tests the **flow/UI**, not real face accuracy — recognition uses synthetic
   embeddings, so recognize/enroll round-trips match best on the same image. Real accuracy
