@@ -71,14 +71,14 @@ function applyTheme(mode) {
 
 /* ── Toast ─────────────────────────────────────────────────── */
 let toastTimer = null;
-function showToast(title, sub, type) {
+function showToast(title, sub, type, ms) {
   $("toast-title").textContent = title;
   $("toast-sub").textContent = sub || "";
   $("toast-icon").textContent = type === "err" ? "!" : type === "info" ? "i" : "✓";
   toastEl.className = "toast" + (type ? " " + type : "");
   toastEl.hidden = false;
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { toastEl.hidden = true; }, 3500);
+  toastTimer = setTimeout(() => { toastEl.hidden = true; }, ms || (type === "err" ? 6000 : 3500));
 }
 
 const lastStatusByUser = {};
@@ -91,9 +91,13 @@ function toastForFace(face) {
   const dir = DIR[face.direction] || "masuk";
   const time = new Date().toLocaleTimeString();
   let status = face.attendance_status;
+
   if (status === undefined) {
-    // Older server: fall back to the boolean flags.
-    status = face.attendance_logged ? "logged" : face.attendance_duplicate ? "duplicate" : "skipped";
+    // Older/uncached server: infer from the boolean flags, and never stay silent.
+    if (face.attendance_logged) status = "logged";
+    else if (face.attendance_duplicate) status = "duplicate";
+    else if (face.direction === "out") status = "not_checked_in";
+    else status = "unknown";
   }
 
   if (status === "logged") {
@@ -101,14 +105,17 @@ function toastForFace(face) {
     lastStatusByUser[uid] = status;
     return;
   }
-  if (status === "duplicate" || status === "not_checked_in" || status === "skipped") {
-    if (lastStatusByUser[uid] === status) return;
-    lastStatusByUser[uid] = status;
-    if (status === "duplicate") {
-      showToast(`Sudah absen ${dir} hari ini`, `${name} tidak dicatat dua kali`, "info");
-    } else if (status === "not_checked_in") {
-      showToast("Belum presensi masuk", `${name} harus absen masuk dulu sebelum pulang`, "err");
-    }
+
+  // Non-recording outcomes: tell the user once per state change (no spam).
+  if (lastStatusByUser[uid] === status) return;
+  lastStatusByUser[uid] = status;
+
+  if (status === "duplicate") {
+    showToast(`Sudah absen ${dir} hari ini`, `${name} sudah tercatat — tidak dicatat dua kali`, "info");
+  } else if (status === "not_checked_in") {
+    showToast("Anda belum melakukan presensi masuk", `${name} harus absen masuk dulu sebelum absen pulang`, "err");
+  } else if (status === "skipped" || status === "unknown") {
+    showToast("Tidak dicatat", `${name} terverifikasi tanpa menulis absensi`, "info");
   }
 }
 
@@ -288,10 +295,20 @@ function updateMatchCard(face) {
   const chipText = {
     logged: `Presensi ${dirTitle} Berhasil`,
     duplicate: `Sudah Absen ${dirTitle} Hari Ini`,
-    not_checked_in: "Belum Presensi Masuk",
+    not_checked_in: "Anda Belum Presensi Masuk",
     skipped: "Terverifikasi",
   }[status] || "Terverifikasi";
+  $("match-state-chip").className = "chip " + (status === "not_checked_in" ? "error" : status === "logged" ? "primary-outline" : "");
   $("match-state-chip").innerHTML = `<span class="dot pulse"></span>${chipText}`;
+
+  // Persistent on-screen reason (the toast is transient).
+  $("vf-sub").textContent = status === "not_checked_in"
+    ? "Anda belum melakukan presensi masuk hari ini"
+    : status === "logged"
+      ? `Absen ${dir} tercatat ${new Date().toLocaleTimeString("id-ID", { hour12: false })}`
+      : status === "duplicate"
+        ? `Sudah absen ${dir} hari ini`
+        : "Pengenalan langsung aktif";
 
   const attText = {
     logged: `Absen ${dir} tercatat`,

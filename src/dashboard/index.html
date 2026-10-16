@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>VeriFace AI — Presensi Pengenalan Wajah</title>
   <script>try { if (localStorage.getItem("vf-theme") === "light") document.documentElement.classList.add("light"); } catch (e) {}</script>
-  <link rel="stylesheet" href="/static/style.css?v=8" />
+  <link rel="stylesheet" href="/static/style.css?v=10" />
 </head>
 <body>
   <!-- Inline icon sprite (offline, no icon font needed) -->
@@ -178,7 +178,7 @@
 
             <div class="controls-row">
               <button class="btn primary" id="btn-camera"><svg class="icon"><use href="#i-camera"/></svg><span>Mulai Kamera</span></button>
-              <label class="toggle"><input type="checkbox" id="chk-live" checked /> Pengenalan Langsung</label>
+              <label class="toggle" title="Saat aktif, wajah yang dikenali langsung dicatat sesuai mode Masuk/Pulang yang dipilih"><input type="checkbox" id="chk-live" checked /> Rekam absensi otomatis</label>
             </div>
 
             <div class="tips-bar">
@@ -380,6 +380,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=8"></script>
+  <script src="/static/app.js?v=10"></script>
 </body>
 </html>

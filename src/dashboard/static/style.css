@@ -108,6 +108,7 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; backgrou
 .chip { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--surface-highest); color: var(--on-surface-variant); display: inline-flex; align-items: center; gap: 5px; }
 .chip.primary { background: var(--primary-soft); color: var(--primary); }
 .chip.primary-outline { background: var(--primary-soft); color: var(--primary); }
+.chip.error { background: rgba(147, 0, 10, 0.28); color: var(--error); }
 
 /* progress bar */
 .bar { width: 100%; height: 6px; border-radius: 999px; background: var(--surface-highest); overflow: hidden; margin-top: 4px; }
@@ -363,6 +364,7 @@ html.light .mode-toggle { box-shadow: 0 8px 20px rgba(16, 24, 40, 0.1); }
 html.light .btn.danger { border-color: #fda29b; color: #b42318; }
 html.light .btn.danger:hover { background: #fee4e2; border-color: #f04438; color: #912018; }
 html.light .badge.err { background: #fee4e2; color: #b42318; }
+html.light .chip.error { background: #fee4e2; color: #b42318; }
 html.light .badge.ok { background: #d1fadf; color: #054f31; }
 html.light .badge.demo { background: #ccfbf1; color: #0f766e; }
 html.light .stat-ico.alert { background: rgba(180, 35, 24, 0.1); }
