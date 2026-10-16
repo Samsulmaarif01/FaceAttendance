@@ -16,6 +16,7 @@ from src.recognition.extractor import (
     EnsembleExtractor, FaceAligner, FaceMatcher,
     ONNXEmbeddingModel,
 )
+from src.recognition.synthetic import SyntheticEmbeddingModel
 from src.liveness.detector import LivenessDetector, LivenessResult
 from src.database.database import Database, BioHasher, User, AttendanceRecord
 from src.security.audit import AuditLog
@@ -82,6 +83,10 @@ class PipelineConfig:
     matcher_backend: str = "linear"  # "linear" | "indexed"
     index_backend: str = "auto"      # "auto" | "brute_force" | "faiss"
     index_use_hnsw: bool = False
+
+    # Demo / testing (phase 6). When enabled, the pipeline runs without ONNX
+    # models: a synthetic embedding model is used and liveness is bypassed.
+    demo_mode: bool = False
 
     # System
     frame_skip: int = 2  # Process every Nth frame to save CPU
@@ -150,12 +155,18 @@ class FacePipeline:
             except Exception as e:
                 print(f"Warning: Could not load recognition model {model_info['name']}: {e}")
 
-        if not recognition_models:
+        if not recognition_models and self.config.demo_mode:
+            print("Demo mode: using SyntheticEmbeddingModel (no ONNX models loaded)")
+            recognition_models = [SyntheticEmbeddingModel()]
+            model_weights = [1.0]
+        elif not recognition_models:
             raise RuntimeError("No recognition models loaded")
+        else:
+            model_weights = [m["weight"] for m in self.config.recognition_models]
 
         self.ensemble_extractor = EnsembleExtractor(
             models=recognition_models,
-            weights=[m["weight"] for m in self.config.recognition_models],
+            weights=model_weights,
             tta_enabled=self.config.recognition_tta_enabled,
             tta_rotations=self.config.recognition_tta_rotations,
             tta_brightness=self.config.recognition_tta_brightness,
@@ -259,16 +270,7 @@ class FacePipeline:
             return []
 
         # Detect faces
-        detections = []
-        if self.detector is not None:
-            try:
-                detections = self.detector.detect(frame)
-            except Exception as e:
-                print(f"Detection error: {e}")
-                detections = []
-        else:
-            # Dummy detection for testing
-            detections = self._dummy_detection(frame)
+        detections = self._detect(frame)
 
         # Apply quality gate
         detections = self.quality_gate.check_batch(frame, detections)
@@ -281,8 +283,9 @@ class FacePipeline:
             # Align face
             aligned = self.aligner.align(frame, det.landmarks)
 
-            # Extract embedding
-            embedding = self.ensemble_extractor.extract(aligned, det.landmarks)
+            # Extract embedding (EnsembleExtractor aligns internally from the
+            # original frame; passing an already-aligned crop would misalign)
+            embedding = self.ensemble_extractor.extract(frame, det.landmarks)
 
             # Liveness detection (simplified: use face ROI for landmarks)
             # In a real system, we would use landmarks from a 68-point detector
@@ -296,6 +299,10 @@ class FacePipeline:
                 user_templates = self._get_user_templates()
                 if user_templates:
                     match_result = self.matcher.match(embedding, user_templates)
+                    if match_result is not None:
+                        user = self.database.get_user(match_result.user_id)
+                        if user is not None:
+                            match_result.name = user.name
                     if match_result and match_result.matched:
                         # Update adaptive threshold
                         self.matcher.update_threshold(match_result.user_id, match_result.similarity)
@@ -349,6 +356,38 @@ class FacePipeline:
             return None
         return self.sync_manager.sync_once()
 
+    def _detect(self, frame: np.ndarray) -> List[FaceDetection]:
+        """Run the detector, falling back to centered dummy detection."""
+        if self.detector is not None:
+            try:
+                return self.detector.detect(frame)
+            except Exception as e:
+                print(f"Detection error: {e}")
+                return []
+        return self._dummy_detection(frame)
+
+    def enroll_from_frame(self, frame: np.ndarray, user_id: str, name: str) -> Optional[Dict]:
+        """
+        Enroll a user from a single frame (used by the web API / self-service UI).
+
+        Returns an info dict, or None when no usable face is found.
+        """
+        detections = self.quality_gate.check_batch(frame, self._detect(frame))
+        if not detections:
+            return None
+
+        det = max(detections, key=lambda d: d.bbox[2] * d.bbox[3])
+        embedding = self.ensemble_extractor.extract(frame, det.landmarks)
+
+        success = self.database.add_user(user_id, name, embedding)
+        return {
+            "success": success,
+            "user_id": user_id,
+            "name": name,
+            "confidence": float(det.confidence),
+            "embedding_dim": int(embedding.shape[0]),
+        }
+
     def _dummy_detection(self, frame: np.ndarray) -> List[FaceDetection]:
         """Create a dummy detection for testing when no model is available."""
         h, w = frame.shape[:2]
@@ -377,44 +416,29 @@ class FacePipeline:
         """
         Check liveness for a face.
         Note: This is simplified - in reality we'd need a sequence of landmarks.
-        For now, we'll use a dummy liveness detector that returns random results.
+        In demo mode liveness is bypassed so the pipeline works on single frames.
         """
+        if self.config.demo_mode:
+            return LivenessResult(
+                is_live=True,
+                score=1.0,
+                blink_detected=False,
+                head_movement_detected=False,
+                reason="demo mode: liveness bypassed",
+            )
         # In a real implementation, we would maintain a liveness detector per face track
         # For simplicity, we'll use a single detector and update it with the landmarks
         return self.liveness_detector.update(landmarks)
 
     def _get_user_templates(self) -> Dict[str, np.ndarray]:
         """
-        Get user templates from database for matching.
-        WARNING: This is a simplification. In a real system with biohashing,
-        we cannot recover the original embedding from the biohashed template.
-        This method would need to be replaced with a matching protocol that
-        works with biohashed templates (e.g., by computing biohash of probe
-        and comparing to stored biohash).
-        """
-        # For now, we'll return an empty dict and rely on the database's verify_user method
-        # But for matching, we need to compare embeddings.
-        # We'll create a dummy template for testing if no users exist.
-        users = self.database.get_all_users()
-        if not users:
-            # Create a dummy user for testing
-            dummy_id = "test_user"
-            dummy_name = "Test User"
-            dummy_embedding = np.random.randn(512).astype(np.float32)
-            dummy_embedding = dummy_embedding / np.linalg.norm(dummy_embedding)
-            self.database.add_user(dummy_id, dummy_name, dummy_embedding)
-            users = self.database.get_all_users()
+        Get user templates (decrypted embeddings) from the database for matching.
 
-        # Return a dict of user_id -> embedding (this is NOT secure - for testing only!)
-        # In production, we would need a different approach for matching with biohashing.
-        templates = {}
-        for user in users:
-            # This is insecure: we cannot get the original embedding from biohashed template
-            # For the sake of having a working pipeline in Phase 1, we'll store a copy
-            # of the embedding in the user record (encrypted) or use a different method.
-            # We'll skip this for now and return empty.
-            pass
-        return templates
+        Embeddings are stored Fernet-encrypted at rest and only decrypted in
+        memory for comparison; the biohashed template remains the invertible-free
+        primary record.
+        """
+        return self.database.get_user_templates()
 
     def run(self):
         """Run the main processing loop."""
@@ -499,6 +523,29 @@ class FacePipeline:
 def create_default_config() -> PipelineConfig:
     """Create a default pipeline configuration."""
     return PipelineConfig()
+
+
+def create_demo_config(**overrides) -> PipelineConfig:
+    """
+    Create a configuration for demo / local web testing.
+
+    Runs without ONNX models (synthetic embeddings), processes every frame,
+    and relaxes quality gates so webcam frames are accepted.
+    """
+    config = PipelineConfig(
+        demo_mode=True,
+        frame_skip=1,
+        display_output=False,
+        recognition_tta_enabled=False,
+        liveness_min_frames=1,
+        quality_min_face_size=40,
+        quality_min_sharpness=0.0,
+        quality_min_brightness=10,
+        quality_max_brightness=250,
+    )
+    for key, value in overrides.items():
+        setattr(config, key, value)
+    return config
 
 
 if __name__ == "__main__":

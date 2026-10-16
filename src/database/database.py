@@ -106,6 +106,13 @@ class Database:
     def _get_or_create_key(self) -> bytes:
         return KeyStore(FileKeyStore("data/db.key")).get_or_create_key()
 
+    def _encrypt_embedding(self, embedding: np.ndarray) -> bytes:
+        return self.cipher.encrypt(embedding.astype(np.float32).tobytes())
+
+    def _decrypt_embedding(self, blob: bytes) -> np.ndarray:
+        raw = self.cipher.decrypt(blob)
+        return np.frombuffer(raw, dtype=np.float32).copy()
+
     def _init_db(self):
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         with self._get_conn() as conn:
@@ -117,7 +124,8 @@ class Database:
                     salt BLOB NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
-                    is_active INTEGER DEFAULT 1
+                    is_active INTEGER DEFAULT 1,
+                    encrypted_embedding BLOB
                 )
             """)
             conn.execute("""
@@ -140,6 +148,10 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_attendance_synced
                 ON attendance(synced)
             """)
+            # Migration: older databases lack the encrypted embedding column.
+            columns = [row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()]
+            if "encrypted_embedding" not in columns:
+                conn.execute("ALTER TABLE users ADD COLUMN encrypted_embedding BLOB")
             conn.commit()
 
     @contextmanager
@@ -154,14 +166,16 @@ class Database:
     def add_user(self, user_id: str, name: str, embedding: np.ndarray) -> bool:
         salt = self.biohasher.generate_salt()
         biohashed = self.biohasher.biohash(embedding, self.biohash_token, salt)
+        encrypted = self._encrypt_embedding(embedding)
         now = datetime.utcnow().isoformat()
 
         with self._get_conn() as conn:
             try:
                 conn.execute(
-                    """INSERT INTO users (id, name, biohashed_template, salt, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (user_id, name, biohashed, salt, now, now),
+                    """INSERT INTO users
+                           (id, name, biohashed_template, salt, created_at, updated_at, encrypted_embedding)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (user_id, name, biohashed, salt, now, now, encrypted),
                 )
                 conn.commit()
                 self._audit("user_enrolled", user_id, {"name": name})
@@ -211,13 +225,15 @@ class Database:
     def update_user_embedding(self, user_id: str, embedding: np.ndarray) -> bool:
         salt = self.biohasher.generate_salt()
         biohashed = self.biohasher.biohash(embedding, self.biohash_token, salt)
+        encrypted = self._encrypt_embedding(embedding)
         now = datetime.utcnow().isoformat()
 
         with self._get_conn() as conn:
             cur = conn.execute(
-                """UPDATE users SET biohashed_template = ?, salt = ?, updated_at = ?
+                """UPDATE users SET biohashed_template = ?, salt = ?, updated_at = ?,
+                       encrypted_embedding = ?
                    WHERE id = ?""",
-                (biohashed, salt, now, user_id),
+                (biohashed, salt, now, encrypted, user_id),
             )
             conn.commit()
             if cur.rowcount > 0:
@@ -256,14 +272,25 @@ class Database:
 
     def get_user_templates(self) -> Dict[str, np.ndarray]:
         """
-        For matching, we need to compare against stored templates.
-        Since we only store biohashed templates, we cannot recover original embeddings.
-        This method is a placeholder - in production, matching happens differently:
-        either store encrypted embeddings separately, or use biohashing with known token.
+        Return user_id -> decrypted embedding for active users.
+
+        Embeddings are stored Fernet-encrypted at rest (separate from the
+        biohashed template) so that 1:N matching is possible; they are only
+        decrypted in memory. The biohashed template remains the primary record
+        for 1:1 verification.
         """
-        # WARNING: This returns empty dict - real implementation would
-        # either use encrypted storage for matching or a different approach
-        return {}
+        templates: Dict[str, np.ndarray] = {}
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                """SELECT id, encrypted_embedding FROM users
+                   WHERE is_active = 1 AND encrypted_embedding IS NOT NULL"""
+            ).fetchall()
+        for row in rows:
+            try:
+                templates[row["id"]] = self._decrypt_embedding(row["encrypted_embedding"])
+            except Exception:
+                continue
+        return templates
 
     def log_attendance(
         self,
@@ -293,6 +320,25 @@ class Database:
         with self._get_conn() as conn:
             rows = conn.execute(
                 """SELECT * FROM attendance WHERE synced = 0 ORDER BY timestamp LIMIT ?""",
+                (limit,),
+            ).fetchall()
+            return [
+                AttendanceRecord(
+                    id=r["id"],
+                    user_id=r["user_id"],
+                    timestamp=datetime.fromisoformat(r["timestamp"]),
+                    similarity=r["similarity"],
+                    liveness_score=r["liveness_score"],
+                    synced=bool(r["synced"]),
+                    device_id=r["device_id"],
+                )
+                for r in rows
+            ]
+
+    def list_attendance(self, limit: int = 50) -> List[AttendanceRecord]:
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                """SELECT * FROM attendance ORDER BY timestamp DESC LIMIT ?""",
                 (limit,),
             ).fetchall()
             return [
