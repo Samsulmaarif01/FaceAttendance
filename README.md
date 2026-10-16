@@ -4,13 +4,14 @@ Real-time face recognition attendance for CPU-only edge devices (Raspberry Pi 4,
 
 ## Project Status
 
-Phases 1–4 of the roadmap are implemented (see `docs/system_design.md` §13.8):
+Phases 1–5 of the roadmap are implemented (see `docs/system_design.md` §13.8):
 
 - ✅ **Phase 1 – Core Pipeline**: Camera → Detection → Recognition → Liveness → Database
 - ✅ **Phase 2 – Accuracy**: Test-time augmentation, adaptive per-user thresholds, hard-negative mining
 - ✅ **Phase 3 – Security**: `KeyStore` (TPM-ready), hash-chained `AuditLog`, mTLS helpers, biohashing
 - ✅ **Phase 4 – Offline-First**: LWW-Element-Set CRDT, exponential backoff, zstd delta compression, local autonomy
-- ⚠️ **Missing**: ONNX models, real mTLS socket wiring, FAISS vector index
+- ✅ **Phase 5 – Scalability**: vector index (numpy + optional FAISS), hierarchical coarse→fine matching, per-site sharding, management plane
+- ⚠️ **Missing**: ONNX models, real mTLS socket wiring, FAISS installed (index falls back to numpy)
 
 ## Project Overview
 
@@ -38,7 +39,17 @@ graph TD
 
 ### Current Phase
 
-**Fase 4: Offline-First** (implemented)
+**Fase 5: Scalability** (implemented)
+- **Vector index** – `BruteForceIndex` (exact numpy cosine) + optional `FAISSIndex` (HNSW/flat, lazy import) (`src/index/vector_index.py`)
+- **Hierarchical matching** – `PCAReducer` (numpy SVD) coarse filter → full-vector refinement (`src/index/hierarchical.py`)
+- **Per-site sharding** – `ShardedVectorIndex` routes queries to relevant site shards (`src/index/sharding.py`)
+- **Management plane** – `SiteRegistry` provisions sites, model versions, and aggregates health (`src/index/management.py`)
+- **Indexed matcher** – `IndexedMatcher` is a drop-in `FaceMatcher` using the ANN index
+  (`PipelineConfig.matcher_backend = "indexed"`)
+
+<details>
+<summary>Fase 4: Offline-First (implemented)</summary>
+
 - **CRDT** – `SyncQueue` is backed by an LWW-Element-Set (`src/sync/crdt.py` + `src/sync/queue.py`); enqueue = `add`, ack = tombstone, queues `merge()` conflict-free
 - **Exponential backoff** – jittered reconnection policy (`src/sync/backoff.py`)
 - **Delta + zstd** – uploads are zstd-compressed deltas signed with Ed25519 (`src/sync/compression.py`, `src/sync/signing.py`)
@@ -46,6 +57,8 @@ graph TD
 - **Local autonomy** – enrollment, template updates, deletions and attendance logging never require the network;
   user/attendance events are queued and synced optionally (`SyncManager` in `src/sync/sync_manager.py`,
   wired via `PipelineConfig.sync_enabled` / `Database.sync_queue`)
+
+</details>
 
 ### What Works
 
@@ -103,6 +116,13 @@ src/
 │   ├── queue.py
 │   ├── signing.py
 │   └── sync_manager.py
+├── index/            # Scalability: vector index, hierarchical, sharding
+│   ├── __init__.py
+│   ├── vector_index.py
+│   ├── hierarchical.py
+│   ├── sharding.py
+│   ├── management.py
+│   └── matcher.py
 ├── pipeline/         # Main integration
 │   ├── __init__.py
 │   └── pipeline.py
@@ -117,6 +137,7 @@ tests/
 ├── database/         # Database tests
 ├── security/         # Security (phase 3) tests
 ├── sync/             # Offline-first (phase 4) tests
+├── index/            # Scalability (phase 5) tests
 └── pipeline/         # Integration tests
 
 config/
@@ -203,10 +224,12 @@ python main.py --test
    - Bounded store-and-forward queue with local autonomy (enrollment + attendance)
    - Tests: `python -X utf8 -m pytest tests/sync/ -v`
 
-4. **Phase 5**: Scalability
-   - FAISS vector index
-   - Sharding per site
-   - Central management plane
+4. **Phase 5**: Scalability ✅
+   - Vector index (`BruteForceIndex` numpy + optional FAISS HNSW)
+   - Hierarchical coarse→fine matching (`PCAReducer` + `HierarchicalMatcher`)
+   - Sharding per site (`ShardedVectorIndex`)
+   - Central management plane (`SiteRegistry`)
+   - Tests: `python -X utf8 -m pytest tests/index/ -v`
 
 5. **Phase 6**: UX improvements
    - Real-time overlays
@@ -233,6 +256,8 @@ python main.py --test
 - Simplified liveness detection
 - Sync is network-agnostic: payloads are signed/compressed but no real mTLS socket is wired yet
 - `process_frame` matching still returns no templates (biohashed templates are non-invertible)
+- `faiss`/`hnswlib` not installed: vector index falls back to exact numpy `BruteForceIndex`
+  (hierarchical matching preserves recall; ANN speedup arrives once FAISS is installed)
 - Basic camera support
 
 ### Next Steps
