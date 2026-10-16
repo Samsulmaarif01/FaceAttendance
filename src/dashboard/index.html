@@ -16,6 +16,7 @@
     <section class="panel video-panel">
       <div class="stage">
         <video id="video" autoplay playsinline muted></video>
+        <img id="photo" alt="Uploaded image" hidden />
         <canvas id="overlay"></canvas>
         <div id="video-msg" class="video-msg">Camera off</div>
       </div>
@@ -27,11 +28,16 @@
         </label>
       </div>
       <div class="controls enroll">
-        <input id="enroll-name" type="text" placeholder="Name to enroll" />
+        <input id="enroll-name" type="text" placeholder="Name (required to enroll)" />
         <button id="btn-enroll">Enroll captured face</button>
         <input id="upload" type="file" accept="image/*" hidden />
         <button id="btn-upload">Upload image…</button>
       </div>
+      <p class="hint">
+        Enroll captured face: registers the current webcam frame under the name above
+        (needs the camera on). Upload image…: with a name it enrolls from the photo,
+        without a name it just previews recognition.
+      </p>
       <p id="status" class="status"></p>
     </section>
 

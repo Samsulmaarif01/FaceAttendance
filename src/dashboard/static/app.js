@@ -3,6 +3,7 @@
 const $ = (id) => document.getElementById(id);
 
 const video = $("video");
+const photo = $("photo");
 const overlay = $("overlay");
 const capture = $("capture");
 const badge = $("badge");
@@ -11,9 +12,12 @@ const videoMsg = $("video-msg");
 
 let stream = null;
 let loopTimer = null;
+let frameW = 0;
+let frameH = 0;
 
-function setStatus(msg) {
+function setStatus(msg, type) {
   statusEl.textContent = msg;
+  statusEl.className = "status" + (type ? " " + type : "");
 }
 
 function setBadge(text, cls) {
@@ -36,7 +40,6 @@ async function loadHealth() {
     const h = await fetchJSON("/api/health");
     if (h.demo_mode) setBadge("demo mode", "demo");
     else setBadge("live models", "ok");
-    setStatus(`models=${h.recognition_models}  detector=${h.detector_loaded}  matcher=${h.matcher_backend}`);
   } catch (e) {
     setBadge("offline", "err");
   }
@@ -47,11 +50,14 @@ async function startCamera() {
     stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
     video.srcObject = stream;
     await video.play();
+    photo.hidden = true;
+    video.style.display = "";
     videoMsg.style.display = "none";
     $("btn-camera").textContent = "Stop camera";
+    setStatus("Camera on. Live recognition is running.", "info");
     return true;
   } catch (e) {
-    setStatus("Camera unavailable: " + e.message + " (you can still use Upload image)");
+    setStatus("Camera unavailable: " + e.message + " — you can still use Upload image.", "err");
     return false;
   }
 }
@@ -61,21 +67,29 @@ function stopCamera() {
     stream.getTracks().forEach((t) => t.stop());
     stream = null;
   }
-  videoMsg.style.display = "flex";
+  if (photo.hidden) videoMsg.style.display = "flex";
   $("btn-camera").textContent = "Start camera";
 }
 
 function captureBlob() {
-  const w = video.videoWidth || 640;
-  const h = video.videoHeight || 480;
-  capture.width = w;
-  capture.height = h;
-  const ctx = capture.getContext("2d");
-  ctx.drawImage(video, 0, 0, w, h);
+  frameW = video.videoWidth || 640;
+  frameH = video.videoHeight || 480;
+  capture.width = frameW;
+  capture.height = frameH;
+  capture.getContext("2d").drawImage(video, 0, 0, frameW, frameH);
   return new Promise((resolve) => capture.toBlob(resolve, "image/jpeg", 0.85));
 }
 
-function drawFaces(faces, frameW, frameH) {
+function setFrameSize(w, h) {
+  frameW = w;
+  frameH = h;
+  capture.width = w;
+  capture.height = h;
+  overlay.width = w;
+  overlay.height = h;
+}
+
+function drawFaces(faces) {
   overlay.width = frameW;
   overlay.height = frameH;
   const ctx = overlay.getContext("2d");
@@ -98,9 +112,10 @@ function drawFaces(faces, frameW, frameH) {
 
     ctx.strokeStyle = color;
     ctx.strokeRect(x, y, w, h);
+    const boxH = Math.max(16, frameW / 34);
     const tw = ctx.measureText(label).width + 10;
     ctx.fillStyle = color;
-    ctx.fillRect(x, y - Math.max(16, frameW / 34), tw, Math.max(16, frameW / 34));
+    ctx.fillRect(x, y - boxH, tw, boxH);
     ctx.fillStyle = "#0f172a";
     ctx.fillText(label, x + 5, y - 3);
   }
@@ -110,27 +125,25 @@ async function recognizeBlob(blob) {
   const fd = new FormData();
   fd.append("file", blob, "frame.jpg");
   const data = await fetchJSON("/api/recognize", { method: "POST", body: fd });
-  drawFaces(data.faces, capture.width, capture.height);
+  drawFaces(data.faces);
   return data;
 }
 
 async function liveLoop() {
-  if (!$("chk-live").checked || !stream) return;
+  if (!$("chk-live").checked || !stream || !photo.hidden) return;
   try {
     const blob = await captureBlob();
     const data = await recognizeBlob(blob);
-    const names = data.faces
-      .filter((f) => f.match && f.match.matched)
-      .map((f) => f.match.name);
+    const names = data.faces.filter((f) => f.match && f.match.matched).map((f) => f.match.name);
     if (names.length) {
-      setStatus(`Recognized: ${names.join(", ")} (${data.elapsed_ms} ms)`);
+      setStatus(`Recognized: ${names.join(", ")} (${data.elapsed_ms} ms)`, "ok");
       refreshAttendance();
       refreshStats();
     } else {
-      setStatus(`${data.count} face(s), no match (${data.elapsed_ms} ms)`);
+      setStatus(`${data.count} face(s), no match (${data.elapsed_ms} ms)`, "info");
     }
   } catch (e) {
-    setStatus("Recognize error: " + e.message);
+    setStatus("Recognize error: " + e.message, "err");
   }
 }
 
@@ -145,29 +158,62 @@ async function enrollBlob(blob, name, userId) {
   if (userId) fd.append("user_id", userId);
   fd.append("file", blob, "enroll.jpg");
   const data = await fetchJSON("/api/enroll", { method: "POST", body: fd });
-  setStatus(`Enrolled ${data.name} (${data.user_id})`);
   refreshUsers();
+  refreshStats();
+  return data;
+}
+
+async function showPhoto(file) {
+  if (photo.src) URL.revokeObjectURL(photo.src);
+  photo.src = URL.createObjectURL(file);
+  photo.hidden = false;
+  video.style.display = "none";
+  videoMsg.style.display = "none";
+  await photo.decode();
+  setFrameSize(photo.naturalWidth, photo.naturalHeight);
 }
 
 async function onEnroll() {
   const name = $("enroll-name").value.trim();
-  if (!name) { setStatus("Enter a name before enrolling"); return; }
-  if (!stream) { setStatus("Start the camera first (or use Upload image)"); return; }
+  if (!name) {
+    setStatus("Type a name first, then click Enroll captured face.", "err");
+    $("enroll-name").focus();
+    return;
+  }
+  if (!stream) {
+    setStatus("Start the camera first, or use Upload image… to enroll from a photo.", "err");
+    return;
+  }
   try {
     const blob = await captureBlob();
-    await enrollBlob(blob, name);
+    const data = await enrollBlob(blob, name);
+    setStatus(`Enrolled "${data.name}" (${data.user_id}).`, "ok");
   } catch (e) {
-    setStatus("Enroll error: " + e.message);
+    setStatus("Enroll error: " + e.message, "err");
   }
 }
 
 async function onUpload(file) {
   const name = $("enroll-name").value.trim();
-  if (!name) { setStatus("Enter a name, then choose an image to enroll"); return; }
   try {
-    await enrollBlob(file, name);
+    await showPhoto(file);
+    if (name) {
+      const enrolled = await enrollBlob(file, name);
+      const data = await recognizeBlob(file);
+      setStatus(`Enrolled "${enrolled.name}" and recognized ${data.count} face(s).`, "ok");
+    } else {
+      const data = await recognizeBlob(file);
+      const names = data.faces.filter((f) => f.match && f.match.matched).map((f) => f.match.name);
+      if (names.length) {
+        setStatus(`Recognized: ${names.join(", ")}.`, "ok");
+      } else {
+        setStatus(`${data.count} face(s), no match. Type a name and re-upload to enroll.`, "info");
+      }
+    }
+    refreshStats();
+    refreshAttendance();
   } catch (e) {
-    setStatus("Enroll error: " + e.message);
+    setStatus("Upload error: " + e.message, "err");
   }
 }
 
@@ -209,11 +255,11 @@ async function refreshAttendance() {
 async function onSync() {
   try {
     const r = await fetchJSON("/api/sync", { method: "POST" });
-    setStatus(`Sync: ${r.status}${r.error ? " (" + r.error + ")" : ""}`);
+    setStatus(`Sync: ${r.status}${r.error ? " (" + r.error + ")" : ""}`, r.success ? "ok" : "info");
     refreshAttendance();
     refreshStats();
   } catch (e) {
-    setStatus("Sync error: " + e.message);
+    setStatus("Sync error: " + e.message, "err");
   }
 }
 
