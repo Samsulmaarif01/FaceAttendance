@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Face Attendance — Local Testing</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Face Attendance</h1>
+    <span id="badge" class="badge">connecting…</span>
+  </header>
+
+  <main>
+    <section class="panel video-panel">
+      <div class="stage">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="overlay"></canvas>
+        <div id="video-msg" class="video-msg">Camera off</div>
+      </div>
+      <div class="controls">
+        <button id="btn-camera">Start camera</button>
+        <label class="toggle">
+          <input type="checkbox" id="chk-live" checked />
+          Live recognition
+        </label>
+      </div>
+      <div class="controls enroll">
+        <input id="enroll-name" type="text" placeholder="Name to enroll" />
+        <button id="btn-enroll">Enroll captured face</button>
+        <input id="upload" type="file" accept="image/*" hidden />
+        <button id="btn-upload">Upload image…</button>
+      </div>
+      <p id="status" class="status"></p>
+    </section>
+
+    <section class="panel">
+      <h2>Stats</h2>
+      <div class="stats" id="stats"></div>
+      <h2>Users <span class="muted" id="users-count"></span></h2>
+      <div class="table-wrap"><table id="users"><thead>
+        <tr><th>ID</th><th>Name</th><th>Created</th></tr>
+      </thead><tbody></tbody></table></div>
+    </section>
+
+    <section class="panel wide">
+      <div class="row">
+        <h2>Attendance <span class="muted" id="att-count"></span></h2>
+        <button id="btn-sync">Sync now</button>
+      </div>
+      <div class="table-wrap"><table id="attendance"><thead>
+        <tr><th>User</th><th>Timestamp</th><th>Similarity</th><th>Synced</th></tr>
+      </thead><tbody></tbody></table></div>
+    </section>
+  </main>
+
+  <canvas id="capture" hidden></canvas>
+  <script src="/static/app.js"></script>
+</body>
+</html>
