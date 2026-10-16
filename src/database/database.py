@@ -354,6 +354,25 @@ class Database:
                 for r in rows
             ]
 
+    def get_attendance_summary(self) -> Dict[str, Dict[str, Any]]:
+        """Per-user attendance counts and last timestamp (user_id -> {count, last})."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                """SELECT user_id, COUNT(*) AS cnt, MAX(timestamp) AS last
+                   FROM attendance GROUP BY user_id"""
+            ).fetchall()
+        return {
+            r["user_id"]: {"count": int(r["cnt"]), "last": r["last"]}
+            for r in rows
+        }
+
+    def clear_attendance(self) -> int:
+        """Delete all attendance records. Returns the number removed."""
+        with self._get_conn() as conn:
+            cur = conn.execute("DELETE FROM attendance")
+            conn.commit()
+            return cur.rowcount
+
     def mark_synced(self, record_ids: List[str]) -> int:
         if not record_ids:
             return 0
