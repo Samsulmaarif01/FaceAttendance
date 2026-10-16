@@ -26,6 +26,35 @@ class TestYuNetFaceDetector:
             assert w > 0 and h > 0
             assert 0.0 <= det.confidence <= 1.0
 
+    def test_detects_on_fixed_working_size_and_maps_back(self):
+        """Detection must be resolution-independent: YuNet runs on a downscaled
+        image and boxes are returned in the ORIGINAL frame coordinates."""
+        detector = YuNetFaceDetector(working_size=(320, 240))
+        rng = np.random.default_rng(3)
+        small = rng.integers(0, 255, (240, 320, 3), dtype=np.uint8)
+        big = rng.integers(0, 255, (1080, 1920, 3), dtype=np.uint8)
+
+        detector.detect(small)          # primes the cached input size
+        assert detector._last_input_size == (320, 240)
+        detector.detect(big)
+        # 1920x1080 di-fit ke (320,240) dengan rasio aspek terjaga -> 320x180
+        assert detector._last_input_size == (320, 180), "tidak boleh enlarging ke resolusi frame"
+
+        dets = detector.detect(big)
+        assert isinstance(dets, list)
+        for det in dets:
+            x, y, w, h = det.bbox
+            # koordinat harus berada di dalam frame ASLI (1920x1080), bukan 320x240
+            assert 0 <= x < 1920 and 0 <= y < 1080
+            assert 0 < w <= 1920 and 0 < h <= 1080
+            assert det.landmarks[:, 0].max() <= 1920
+            assert det.landmarks[:, 1].max() <= 1080
+
+    def test_never_upscales_small_frames(self):
+        detector = YuNetFaceDetector(working_size=(640, 480))
+        detector.detect(np.zeros((240, 320, 3), dtype=np.uint8))
+        assert detector._last_input_size == (320, 240)
+
     def test_missing_model_raises(self, tmp_path):
         import pytest
 
