@@ -11,12 +11,15 @@ const stageEl = document.querySelector(".stage");
 
 let stream = null;
 let loopTimer = null;
+let loopBusy = false;
 let frameW = 0;
 let frameH = 0;
 let userMap = {}; // id -> { name, count }
 let mode = null; // null = not chosen yet (no attendance is written); "in" | "out"
 const DIR = { in: "masuk", out: "pulang" };
 const DIR_TITLE = { in: "Masuk", out: "Pulang" };
+const CAMERA_WIDTH = 640;   // see PipelineConfig.detection_working_size
+const CAMERA_HEIGHT = 480;
 
 /* ── Small helpers ─────────────────────────────────────────── */
 function setStatus(msg, type) {
@@ -104,6 +107,53 @@ function showToast(title, sub, type, ms) {
 
 const lastStatusByUser = {};
 
+/* Keadaan "sedang di frame". Digunakan agar pesan (mis. "sudah tercatat")
+   hanya diulang ketika orang benar-benar KELUAR lalu masuk lagi — bukan
+   setiap frame selama dia tetap berdiri di depan kamera. */
+const presentUsers = new Map(); // user_id -> waktu terakhir terdeteksi
+const PRESENCE_GRACE_MS = 3000;  // toleransi berkedip / frame gagal deteksi
+
+function updatePresence(matchedIds) {
+  const now = Date.now();
+  for (const [uid, seenAt] of [...presentUsers]) {
+    if (matchedIds.has(uid)) { presentUsers.set(uid, now); continue; }
+    // Baru dianggap keluar setelah grace period, supaya kedip atau satu frame
+    // gagal deteksi tidak memicu ulang pesan.
+    if (now - seenAt > PRESENCE_GRACE_MS) {
+      presentUsers.delete(uid);
+      delete lastStatusByUser[uid]; // kalau datang lagi, pesan ditampilkan lagi
+    }
+  }
+  for (const uid of matchedIds) {
+    if (!presentUsers.has(uid)) presentUsers.set(uid, now);
+  }
+}
+
+function clearPresence() {
+  presentUsers.clear();
+  Object.keys(lastStatusByUser).forEach((k) => delete lastStatusByUser[k]);
+  lastAttendanceKey = "";
+}
+
+/* Deteksi perubahan status attendance agar tabel/statistik tidak di-refresh
+   pada setiap frame — hanya saat status benar-benar berubah. */
+let lastAttendanceKey = "";
+function attendanceChanged(matched) {
+  const key = matched
+    .map((f) => `${f.match.user_id}:${f.attendance_status}`)
+    .sort()
+    .join("|");
+  if (key === lastAttendanceKey) return false;
+  lastAttendanceKey = key;
+  return true;
+}
+
+function refreshAll() {
+  refreshAttendance();
+  refreshStats();
+  refreshUsers();
+}
+
 /* Decide the notification from the server-side attendance outcome, deduped so
    the 700 ms live loop does not repeat the same message. */
 function toastForFace(face) {
@@ -132,8 +182,11 @@ function toastForFace(face) {
   lastStatusByUser[uid] = status;
 
   if (status === "duplicate") {
+    // "Sudah absen" adalah kondisi sukses, bukan peringatan: tampilkan
+    // centang hijau seperti saat absen dicatat, hanya tidak ditulis ulang.
     const at = face.attendance_duplicate_at ? ` pukul ${fmtClock(face.attendance_duplicate_at)}` : "";
-    showToast(`Anda sudah presensi ${dir} hari ini`, `${name} tercatat${at} — tidak dicatat lagi`, "info");
+    const gate = face.gate_granted ? " · akses gate tetap diberikan" : "";
+    showToast(`Sudah absen ${dir}`, `${name} tercatat${at} — tidak dicatat ulang${gate}`, "");
   } else if (status === "not_checked_in") {
     showToast("Anda belum melakukan presensi masuk", `${name} harus absen masuk dulu sebelum absen pulang`, "err");
   } else if (status === "skipped" || status === "unknown") {
@@ -188,7 +241,17 @@ async function loadHealth() {
 /* ── Camera ────────────────────────────────────────────────── */
 async function startCamera() {
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    stream = await navigator.mediaDevices.getUserMedia({
+      // Batasi resolusi: frame 1080p bikin JPEG 1.5 MB sehingga encode di
+      // browser, upload, dan decode di server ikut mahal (~200 ms). 640x480
+      // cukup untuk deteksi wajah dan jauh lebih ringan.
+      video: {
+        width: { ideal: CAMERA_WIDTH },
+        height: { ideal: CAMERA_HEIGHT },
+        frameRate: { ideal: 30, max: 30 },
+      },
+      audio: false,
+    });
     video.srcObject = stream;
     await video.play();
     photo.hidden = true;
@@ -197,6 +260,7 @@ async function startCamera() {
     $("laser").hidden = false;
     if (stageEl) stageEl.classList.remove("photo-mode");
     setTracking(false);
+    clearPresence();
     $("btn-camera").querySelector("span").textContent = "Hentikan Kamera";
     $("vf-sub").textContent = mode === null
       ? "Pilih mode Presensi Masuk / Pulang untuk mencatat absensi"
@@ -218,6 +282,7 @@ function stopCamera() {
   }
   if (photo.hidden) $("video-msg").hidden = false;
   setTracking(false);
+  clearPresence();
   $("btn-camera").querySelector("span").textContent = "Mulai Kamera";
   $("vf-sub").textContent = "Kamera belum aktif";
 }
@@ -294,7 +359,8 @@ function drawRegisteredLabel(name) {
 async function recognizeBlob(blob, direction, log) {
   const fd = new FormData();
   fd.append("file", blob, "frame.jpg");
-  const qs = `direction=${direction || "in"}&log=${log ? "true" : "false"}`;
+  const gate = $("chk-gate") && $("chk-gate").checked;
+  const qs = `direction=${direction || "in"}&log=${log ? "true" : "false"}&gate=${gate ? "true" : "false"}`;
   const data = await fetchJSON(`/api/recognize?${qs}`, { method: "POST", body: fd });
   drawFaces(data.faces);
   return data;
@@ -329,7 +395,8 @@ function updateMatchCard(face, recording) {
     idle: "Pilih Mode Absensi",
     skipped: "Terverifikasi",
   }[status] || "Terverifikasi";
-  const chipTone = status === "not_checked_in" ? "error" : status === "duplicate" ? "warn" : status === "logged" ? "primary-outline" : "";
+  const chipTone = status === "not_checked_in" ? "error"
+    : (status === "duplicate" || status === "logged") ? "primary" : "";
   $("match-state-chip").className = "chip" + (chipTone ? " " + chipTone : "");
   $("match-state-chip").innerHTML = `<span class="dot pulse"></span>${chipText}`;
 
@@ -373,7 +440,9 @@ function updateMatchCard(face, recording) {
 }
 
 async function liveLoop() {
+  if (loopBusy) return;                    // jangan tumpang tindih dengan loop sebelumnya
   if (!$("chk-live").checked || !stream || !photo.hidden) return;
+  loopBusy = true;
   try {
     const blob = await captureBlob();
     const recording = mode !== null;
@@ -382,6 +451,7 @@ async function liveLoop() {
     $("vf-elapsed").textContent = `AI ${data.elapsed_ms}ms`;
     $("latency-value").textContent = `${data.elapsed_ms}ms (Optimal)`;
     const matched = data.faces.filter((f) => f.match && f.match.matched);
+    updatePresence(new Set(matched.map((f) => f.match.user_id)));
     if (!recording) {
       // No mode chosen yet: recognise only, never write attendance.
       if (matched.length) {
@@ -399,9 +469,11 @@ async function liveLoop() {
       setStatus(`Terdeteksi (${DIR[matched[0].direction] || "masuk"}): ${names.join(", ")} (${data.elapsed_ms} ms)`, "ok");
       for (const f of matched) toastForFace(f);
       updateMatchCard(matched[0], true);
-      refreshAttendance();
-      refreshStats();
-      refreshUsers();
+      // Refresh tabel hanya saat status attendance benar-benar BERUBAH.
+      // Sebelumnya 3 request + render ulang penuh tiap tick (700 ms): saat wajah
+      // terdeteksi itu membuat antrean menumpuk danappeared "lambat" justru
+      // setelah record pertama tercatat (tabel baru punya isi untuk dirender).
+      if (attendanceChanged(matched)) refreshAll();
     } else if (data.count > 0) {
       setStatus(`${data.count} wajah terdeteksi, belum ada yang cocok (${data.elapsed_ms} ms)`, "info");
     } else {
@@ -409,6 +481,8 @@ async function liveLoop() {
     }
   } catch (e) {
     setStatus("Galat pengenalan: " + e.message, "err");
+  } finally {
+    loopBusy = false;
   }
 }
 
@@ -452,11 +526,12 @@ async function refreshUsers() {
           ? (u.checked_in_today ? dirBadge("in") : "") + (u.checked_out_today ? dirBadge("out") : "")
           : `<span class="muted tiny">belum</span>`;
         return `<tr>` +
-          `<td class="mono">${esc(u.id)}</td>` +
-          `<td><span class="avatar-cell">${esc(initials(u.name))}</span>${esc(u.name)}</td>` +
-          `<td class="today-cell">${today}</td>` +
-          `<td>${last}</td>` +
-          `<td><button class="btn danger icon-only" data-delete="${esc(u.id)}" title="Hapus pengguna">` +
+          `<td class="mono nowrap">${esc(u.id)}</td>` +
+          `<td><div class="user-name-cell"><span class="avatar-cell">${esc(initials(u.name))}</span>` +
+          `<span class="user-name-text">${esc(u.name)}</span></div></td>` +
+          `<td class="today-cell"><div class="chip-row">${today}</div></td>` +
+          `<td class="mono nowrap">${last}</td>` +
+          `<td class="action-cell"><button class="btn danger icon-only" data-delete="${esc(u.id)}" title="Hapus pengguna">` +
           `<svg class="icon sm"><use href="#i-trash"/></svg></button></td>` +
           `</tr>`;
       })
@@ -650,7 +725,7 @@ function wire() {
     mode = next;
     inBtn.classList.toggle("active", next === "in");
     outBtn.classList.toggle("active", next === "out");
-    Object.keys(lastStatusByUser).forEach((k) => delete lastStatusByUser[k]);
+    clearPresence();
     $("vf-hint").textContent = next === "in"
       ? "Posisikan Wajah — Mode Presensi Masuk"
       : "Posisikan Wajah — Mode Presensi Pulang";

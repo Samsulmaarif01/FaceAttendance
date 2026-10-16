@@ -279,14 +279,28 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); }
 th { color: var(--on-surface-variant); font-weight: 500; position: sticky; top: 0; background: var(--surface-container); font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
 tbody tr:hover { background: var(--surface-low); }
-.avatar-cell { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%; background: var(--surface-highest); color: var(--primary); font-size: 11px; font-weight: 700; margin-right: 8px; }
-.today-cell { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .table-empty { color: var(--outline); text-align: center; }
 
+/* Table cells must stay `display: table-cell`; any flex layout goes on a
+   wrapper INSIDE the cell. Setting `display: flex` on a <td> drops it from the
+   table box model, the column collapses and the badges crowd together. */
+.nowrap { white-space: nowrap; }
+.chip-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.user-name-cell { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.user-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.avatar-cell { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%; background: var(--surface-highest); color: var(--primary); font-size: 11px; font-weight: 700; flex: 0 0 auto; }
+.action-cell { width: 1%; white-space: nowrap; }
+/* Let wide tables scroll horizontally instead of crushing their columns. */
+#users { min-width: 560px; }
+#attendance { min-width: 640px; }
+
 /* ── Enroll row ──────────────────────────────────────────── */
-.enroll-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-.enroll-row input[type="text"] { flex: 1; min-width: 180px; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-low); color: var(--on-surface); font: inherit; }
+/* Grid (not flex) so the two inputs and two buttons share the row evenly and
+   never squeeze each other; auto-fit wraps them cleanly on narrow screens. */
+.enroll-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; align-items: stretch; }
+.enroll-row input[type="text"] { width: 100%; min-width: 0; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-low); color: var(--on-surface); font: inherit; }
 .enroll-row input[type="text"]:focus { outline: none; border-color: var(--primary); }
+.enroll-row .btn { justify-content: center; white-space: nowrap; }
 
 /* ── Toast ───────────────────────────────────────────────── */
 .toast { position: fixed; top: 80px; right: 20px; z-index: 80; display: flex; align-items: center; gap: 12px; min-width: 250px; max-width: 360px; padding: 14px 18px; border-radius: 14px; background: #14532d; border: 1px solid var(--primary); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); animation: toast-in 0.25s ease-out; }
