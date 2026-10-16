@@ -17,6 +17,9 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.fernet import Fernet
 
+from src.security.keystore import FileKeyStore, KeyStore
+from src.security.audit import AuditLog
+
 
 @dataclass
 class User:
@@ -76,24 +79,22 @@ class Database:
         db_path: str = "data/attendance.db",
         encryption_key: Optional[bytes] = None,
         biohash_token: Optional[bytes] = None,
+        audit_log: Optional[AuditLog] = None,
     ):
         self.db_path = db_path
         self.encryption_key = encryption_key or self._get_or_create_key()
         self.cipher = Fernet(self.encryption_key)
         self.biohash_token = biohash_token or secrets.token_bytes(32)
         self.biohasher = BioHasher()
+        self.audit_log = audit_log
         self._init_db()
 
+    def _audit(self, event_type: str, user_id: str = "", details: Optional[dict] = None) -> None:
+        if self.audit_log is not None:
+            self.audit_log.log(event_type, user_id=user_id, details=details or {})
+
     def _get_or_create_key(self) -> bytes:
-        key_path = "data/db.key"
-        if os.path.exists(key_path):
-            with open(key_path, "rb") as f:
-                return f.read()
-        key = Fernet.generate_key()
-        os.makedirs(os.path.dirname(key_path), exist_ok=True)
-        with open(key_path, "wb") as f:
-            f.write(key)
-        return key
+        return KeyStore(FileKeyStore("data/db.key")).get_or_create_key()
 
     def _init_db(self):
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
@@ -153,8 +154,10 @@ class Database:
                     (user_id, name, biohashed, salt, now, now),
                 )
                 conn.commit()
+                self._audit("user_enrolled", user_id, {"name": name})
                 return True
             except sqlite3.IntegrityError:
+                self._audit("user_enrollment_rejected", user_id, {"name": name, "reason": "duplicate"})
                 return False
 
     def get_user(self, user_id: str) -> Optional[User]:
@@ -200,19 +203,27 @@ class Database:
                 (biohashed, salt, now, user_id),
             )
             conn.commit()
+            if cur.rowcount > 0:
+                self._audit("template_updated", user_id)
             return cur.rowcount > 0
 
     def delete_user(self, user_id: str) -> bool:
         with self._get_conn() as conn:
             cur = conn.execute("UPDATE users SET is_active = 0 WHERE id = ?", (user_id,))
             conn.commit()
+            if cur.rowcount > 0:
+                self._audit("user_deleted", user_id)
             return cur.rowcount > 0
 
     def verify_user(self, user_id: str, embedding: np.ndarray) -> bool:
         user = self.get_user(user_id)
         if not user:
+            self._audit("verification_failed", user_id)
             return False
-        return self.biohasher.verify(embedding, user.biohashed_template, self.biohash_token, user.salt)
+        verified = self.biohasher.verify(embedding, user.biohashed_template, self.biohash_token, user.salt)
+        if not verified:
+            self._audit("verification_failed", user_id)
+        return verified
 
     def get_user_templates(self) -> Dict[str, np.ndarray]:
         """
@@ -242,6 +253,11 @@ class Database:
                 (record_id, user_id, timestamp, similarity, liveness_score, device_id),
             )
             conn.commit()
+        self._audit(
+            "attendance_logged",
+            user_id,
+            {"similarity": similarity, "liveness_score": liveness_score, "device_id": device_id},
+        )
         return record_id
 
     def get_unsynced_records(self, limit: int = 50) -> List[AttendanceRecord]:
