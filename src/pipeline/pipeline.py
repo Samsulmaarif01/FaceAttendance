@@ -33,6 +33,7 @@ class PipelineConfig:
 
     # Detection
     detection_model_path: str = "models/scrfd.onnx"
+    detector_backend: str = "auto"  # "auto" | "scrfd" | "cascade" | "dummy"
     detection_input_size: tuple = (640, 640)
     detection_conf_threshold: float = 0.5
     detection_nms_threshold: float = 0.4
@@ -112,17 +113,29 @@ class FacePipeline:
         self.camera = Camera(camera_config)
 
         # Detection
-        try:
-            self.detector = SCRFDDetector(
-                model_path=self.config.detection_model_path,
-                input_size=self.config.detection_input_size,
-                conf_threshold=self.config.detection_conf_threshold,
-                nms_threshold=self.config.detection_nms_threshold,
-                max_faces=self.config.detection_max_faces,
-            )
-        except Exception as e:
-            print(f"Warning: Could not load detection model: {e}")
-            self.detector = None  # Will use dummy detection
+        self.detector = None
+        backend = self.config.detector_backend
+        if backend in ("auto", "scrfd"):
+            try:
+                self.detector = SCRFDDetector(
+                    model_path=self.config.detection_model_path,
+                    input_size=self.config.detection_input_size,
+                    conf_threshold=self.config.detection_conf_threshold,
+                    nms_threshold=self.config.detection_nms_threshold,
+                    max_faces=self.config.detection_max_faces,
+                )
+            except Exception as e:
+                print(f"Warning: Could not load SCRFD detection model: {e}")
+        if self.detector is None and backend in ("auto", "cascade", "yunet"):
+            try:
+                from src.detection.yunet import YuNetFaceDetector
+
+                self.detector = YuNetFaceDetector()
+                print("Using YuNet face detector (model-free fallback)")
+            except Exception as e:
+                print(f"Warning: Could not load YuNet detector: {e}")
+        if self.detector is None and backend != "dummy":
+            print("Warning: no face detector available; using dummy centered detection")
 
         self.quality_gate = QualityGate(
             min_face_size=self.config.quality_min_face_size,
