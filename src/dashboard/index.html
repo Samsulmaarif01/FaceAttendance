@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Face Attendance — Local Testing</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v=3" />
 </head>
 <body>
   <header>
@@ -55,10 +55,15 @@
       <div class="row">
         <h2>Attendance <span class="muted" id="att-count"></span></h2>
         <div class="row-actions">
-          <button id="btn-sync">Sync now</button>
+          <button id="btn-sync" title="Upload unsynced attendance to a central server (offline demo has no server, so this is disabled)">Sync now</button>
           <button id="btn-clear-att" class="danger">Clear attendance</button>
         </div>
       </div>
+      <p class="hint" id="sync-note" hidden>
+        Sync uploads attendance recorded offline to a central server. It is
+        <strong>disabled in the offline demo</strong> (no server transport configured),
+        so records stay local and marked <em>unsynced</em>.
+      </p>
       <div class="table-wrap"><table id="attendance"><thead>
         <tr><th>User</th><th>Timestamp</th><th>Similarity</th><th>Synced</th></tr>
       </thead><tbody></tbody></table></div>
@@ -73,6 +78,6 @@
       <div class="toast-sub" id="toast-sub"></div>
     </div>
   </div>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=3"></script>
 </body>
 </html>

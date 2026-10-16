@@ -38,6 +38,22 @@ function showToast(title, sub, type) {
   toastTimer = setTimeout(() => { toastEl.hidden = true; }, 3500);
 }
 
+const lastToastAt = {};
+
+function maybeAttendanceToast(face) {
+  const uid = face.match.user_id;
+  const now = Date.now();
+  if (face.attendance_logged === true) {
+    showToast("Absen berhasil", `${face.match.name} • ${new Date().toLocaleTimeString()}`, "");
+    lastToastAt[uid] = now;
+    return;
+  }
+  if (face.attendance_logged === undefined && now - (lastToastAt[uid] || 0) > 15000) {
+    showToast("Absen berhasil", `${face.match.name} • ${new Date().toLocaleTimeString()}`, "");
+    lastToastAt[uid] = now;
+  }
+}
+
 async function fetchJSON(url, options) {
   const res = await fetch(url, options);
   if (!res.ok) {
@@ -53,6 +69,12 @@ async function loadHealth() {
     const h = await fetchJSON("/api/health");
     if (h.demo_mode) setBadge("demo mode", "demo");
     else setBadge("live models", "ok");
+    if (!h.sync_enabled) {
+      const btn = $("btn-sync");
+      btn.disabled = true;
+      btn.title = "Sync is disabled: offline demo has no central server transport.";
+      $("sync-note").hidden = false;
+    }
   } catch (e) {
     setBadge("offline", "err");
   }
@@ -151,11 +173,7 @@ async function liveLoop() {
     if (matched.length) {
       const names = matched.map((f) => f.match.name);
       setStatus(`Recognized: ${names.join(", ")} (${data.elapsed_ms} ms)`, "ok");
-      for (const f of matched) {
-        if (f.attendance_logged) {
-          showToast("Absen berhasil", `${f.match.name} • ${new Date().toLocaleTimeString()}`, "");
-        }
-      }
+      for (const f of matched) maybeAttendanceToast(f);
       refreshAttendance();
       refreshStats();
     } else {
@@ -323,6 +341,10 @@ async function refreshAttendance() {
 async function onSync() {
   try {
     const r = await fetchJSON("/api/sync", { method: "POST" });
+    if (r.status === "disabled") {
+      setStatus("Sync disabled — offline demo has no central server.", "info");
+      return;
+    }
     setStatus(`Sync: ${r.status}${r.error ? " (" + r.error + ")" : ""}`, r.success ? "ok" : "info");
     refreshAttendance();
     refreshStats();
