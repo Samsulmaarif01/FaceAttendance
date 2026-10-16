@@ -89,10 +89,10 @@ def create_app(
         }
 
     @app.post("/api/recognize", response_model=schemas.RecognizeResponse)
-    async def recognize(file: UploadFile = File(...)) -> dict:
+    async def recognize(file: UploadFile = File(...), log: bool = True) -> dict:
         frame = decode_image(await file.read())
         start = time.perf_counter()
-        results = pipe.process_frame(frame)
+        results = pipe.process_frame(frame, log_attendance=log)
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         faces = [_serialize_face(r) for r in results]
         return {"faces": faces, "count": len(faces), "elapsed_ms": round(elapsed_ms, 2)}
@@ -115,18 +115,25 @@ def create_app(
     @app.get("/api/users", response_model=schemas.UsersResponse)
     def users() -> dict:
         people = pipe.database.get_all_users()
-        return {
-            "users": [
-                {
-                    "id": u.id,
-                    "name": u.name,
-                    "is_active": bool(u.is_active),
-                    "created_at": u.created_at.isoformat(),
-                }
-                for u in people
-            ],
-            "count": len(people),
-        }
+        summary = pipe.database.get_attendance_summary()
+        result = []
+        for u in people:
+            stats = summary.get(u.id, {})
+            result.append({
+                "id": u.id,
+                "name": u.name,
+                "is_active": bool(u.is_active),
+                "created_at": u.created_at.isoformat(),
+                "attendance_count": int(stats.get("count", 0)),
+                "last_attendance": stats.get("last"),
+            })
+        return {"users": result, "count": len(result)}
+
+    @app.delete("/api/users/{user_id}", response_model=schemas.DeleteResponse)
+    def delete_user(user_id: str) -> dict:
+        if not pipe.database.delete_user(user_id):
+            raise HTTPException(status_code=404, detail=f"User '{user_id}' not found")
+        return {"success": True, "id": user_id}
 
     @app.get("/api/attendance", response_model=schemas.AttendanceResponse)
     def attendance(limit: int = 50) -> dict:
@@ -145,6 +152,11 @@ def create_app(
             ],
             "count": len(records),
         }
+
+    @app.delete("/api/attendance", response_model=schemas.DeleteResponse)
+    def clear_attendance() -> dict:
+        removed = pipe.database.clear_attendance()
+        return {"success": True, "deleted": removed}
 
     @app.get("/api/stats", response_model=schemas.StatsResponse)
     def stats() -> dict:

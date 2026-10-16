@@ -60,11 +60,19 @@ class UserInfo(BaseModel):
     name: str
     is_active: bool
     created_at: str
+    attendance_count: int = 0
+    last_attendance: Optional[str] = None
 
 
 class UsersResponse(BaseModel):
     users: List[UserInfo]
     count: int
+
+
+class DeleteResponse(BaseModel):
+    success: bool
+    id: Optional[str] = None
+    deleted: Optional[int] = None
 
 
 class AttendanceInfo(BaseModel):
