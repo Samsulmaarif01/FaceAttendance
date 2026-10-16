@@ -55,6 +55,7 @@ def _serialize_face(result: dict) -> dict:
             "reason": liveness.reason,
         },
         "match": None,
+        "attendance_logged": bool(result.get("attendance_logged", False)),
     }
     if match is not None:
         face["match"] = {

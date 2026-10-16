@@ -263,6 +263,8 @@ UI, enrollment, and attendance flow end-to-end.
 - **Register from image…**: enrolls a face from a photo **only** — it never writes attendance.
 - **Attendance is throttled**: at most one record per user per `attendance_throttle_seconds`
   window (default 60s); `POST /api/recognize?log=false` recognizes without recording.
+- **Success popup**: a toast ("Absen berhasil", name + time) appears whenever a new
+  attendance record is written; `recognize` returns `attendance_logged` per face.
 - **Delete user** / **Clear attendance**: buttons in the dashboard (`DELETE /api/users/{id}`,
   `DELETE /api/attendance`).
 - Webcam requires `localhost`/HTTPS (a secure context); `127.0.0.1` is fine.

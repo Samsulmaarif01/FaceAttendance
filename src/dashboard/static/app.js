@@ -25,6 +25,19 @@ function setBadge(text, cls) {
   badge.className = "badge" + (cls ? " " + cls : "");
 }
 
+const toastEl = $("toast");
+let toastTimer = null;
+
+function showToast(title, sub, type) {
+  $("toast-title").textContent = title;
+  $("toast-sub").textContent = sub || "";
+  $("toast-icon").textContent = type === "err" ? "!" : type === "info" ? "i" : "✓";
+  toastEl.className = "toast" + (type ? " " + type : "");
+  toastEl.hidden = false;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toastEl.hidden = true; }, 3500);
+}
+
 async function fetchJSON(url, options) {
   const res = await fetch(url, options);
   if (!res.ok) {
@@ -134,9 +147,15 @@ async function liveLoop() {
   try {
     const blob = await captureBlob();
     const data = await recognizeBlob(blob);
-    const names = data.faces.filter((f) => f.match && f.match.matched).map((f) => f.match.name);
-    if (names.length) {
+    const matched = data.faces.filter((f) => f.match && f.match.matched);
+    if (matched.length) {
+      const names = matched.map((f) => f.match.name);
       setStatus(`Recognized: ${names.join(", ")} (${data.elapsed_ms} ms)`, "ok");
+      for (const f of matched) {
+        if (f.attendance_logged) {
+          showToast("Absen berhasil", `${f.match.name} • ${new Date().toLocaleTimeString()}`, "");
+        }
+      }
       refreshAttendance();
       refreshStats();
     } else {
@@ -190,6 +209,7 @@ async function onEnroll() {
     const blob = await captureBlob();
     const data = await enrollBlob(blob, name, userId);
     setStatus(`Enrolled "${data.name}" (${data.user_id}).`, "ok");
+    showToast("Wajah terdaftar", `${data.name} (${data.user_id})`, "");
   } catch (e) {
     setStatus("Enroll error: " + e.message, "err");
   }
@@ -208,6 +228,7 @@ async function onUpload(file) {
     const data = await enrollBlob(file, name, userId);
     drawRegisteredLabel(data.name);
     setStatus(`Registered "${data.name}" (${data.user_id}) from image. No attendance written.`, "ok");
+    showToast("Pendaftaran berhasil", `${data.name} — tanpa absensi`, "info");
     refreshAttendance();
   } catch (e) {
     setStatus("Register error: " + e.message, "err");

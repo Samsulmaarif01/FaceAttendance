@@ -40,6 +40,7 @@ class FaceResult(BaseModel):
     confidence: float
     liveness: LivenessInfo
     match: Optional[MatchInfo] = None
+    attendance_logged: bool = False
 
 
 class RecognizeResponse(BaseModel):

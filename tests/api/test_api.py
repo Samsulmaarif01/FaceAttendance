@@ -97,7 +97,8 @@ class TestEnroll:
 class TestAttendanceAndStats:
     def test_matched_recognition_logs_attendance(self, client):
         client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(6))
-        client.post("/api/recognize", files=_files(6))
+        res = client.post("/api/recognize", files=_files(6))
+        assert res.json()["faces"][0]["attendance_logged"] is True
 
         stats = client.get("/api/stats").json()
         assert stats["total"] == 1
@@ -112,12 +113,13 @@ class TestAttendanceAndStats:
         res = client.post("/api/recognize?log=false", files=_files(6))
         assert res.status_code == 200
         assert res.json()["faces"][0]["match"]["matched"] is True
+        assert res.json()["faces"][0]["attendance_logged"] is False
         assert client.get("/api/stats").json()["total"] == 0
 
     def test_attendance_is_throttled_per_user(self, client):
         client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(6))
-        client.post("/api/recognize", files=_files(6))
-        client.post("/api/recognize", files=_files(6))
+        assert client.post("/api/recognize", files=_files(6)).json()["faces"][0]["attendance_logged"] is True
+        assert client.post("/api/recognize", files=_files(6)).json()["faces"][0]["attendance_logged"] is False
         assert client.get("/api/stats").json()["total"] == 1
 
     def test_users_report_last_attendance(self, client):

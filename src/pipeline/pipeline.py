@@ -312,6 +312,7 @@ class FacePipeline:
 
             # Match against database
             match_result = None
+            attendance_logged = False
             if liveness_result.is_live:
                 # Get user templates from database (this is a simplification)
                 # In reality, we'd need to store encrypted embeddings or use a different approach
@@ -340,6 +341,7 @@ class FacePipeline:
                                 similarity=match_result.similarity,
                                 liveness_score=liveness_result.score,
                             )
+                            attendance_logged = True
 
             results.append({
                 "detection": det,
@@ -348,6 +350,7 @@ class FacePipeline:
                 "match": match_result,
                 "aligned_face": aligned,
                 "face_roi": face_roi,
+                "attendance_logged": attendance_logged,
             })
 
         return results
