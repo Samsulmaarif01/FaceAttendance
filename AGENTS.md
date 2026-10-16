@@ -4,7 +4,7 @@ Compact operating notes for this repo. See `CLAUDE.md` for the design vision and
 
 ## Reality check (read before editing)
 
-- This is a **Phase 1 skeleton**. Only `src/camera`, `src/detection`, `src/recognition`, `src/liveness`, `src/database`, `src/pipeline` contain code. `src/api`, `src/dashboard`, `src/security`, `src/sync` are empty packages (`__init__.py` only).
+- This is a **Phase 1 skeleton with Phase 2/3 additions**. `src/camera`, `src/detection`, `src/recognition`, `src/liveness`, `src/database`, `src/pipeline` contain the running pipeline; `src/security` now has `keystore.py`, `audit.py`, `tls.py`. `src/api`, `src/dashboard`, `src/sync` are empty packages (`__init__.py` only); `src/sync` mTLS not yet wired.
 - `config/default.yaml` / `config/local.yaml` are **not loaded anywhere**. `pipeline.py` never imports `yaml`; all runtime config comes from the `PipelineConfig` dataclass in `src/pipeline/pipeline.py`. Editing YAML has no effect today.
 - `models/` is empty and gitignored; no `.onnx` files exist. `FacePipeline.__init__` raises `RuntimeError("No recognition models loaded")` when none load, so `python main.py` and `python main.py --test` both fail as-is (the `--test` path sets `recognition_models = []`, which still raises).
 - `process_frame` never actually matches anyone: `FacePipeline._get_user_templates()` (`src/pipeline/pipeline.py:283`) always returns `{}`.
@@ -22,20 +22,21 @@ python -X utf8 test_imports.py
 python -X utf8 test_pipeline.py          # 3 pass / 2 fail (liveness kwarg + no models)
 python -X utf8 test_pipeline_creation.py # fails: RuntimeError no recognition models
 
-# The only real pytest suite; pytest is NOT installed in the default env.
-python -m pytest tests/recognition -v
+# Real pytest suites (phase 2 + phase 3). pytest must be installed first.
+python -m pytest tests/ -v
 ```
 
 - `test_pipeline.py` failure 1: it calls `LivenessDetector(min_frames=...)` but the param is `blink_frames`. Failure 2: `FacePipeline` needs loadable recognition models.
-- `tests/` is otherwise empty (only `__init__.py`); `tests/recognition/test_accuracy.py` is the sole populated suite.
+- `tests/` has two populated suites: `tests/recognition/test_accuracy.py` (phase 2) and `tests/security/test_security.py` (phase 3); other `tests/*` dirs are empty (`__init__.py` only).
 
 ## Dependencies
 
-`requirements.txt` is largely aspirational. In the default Python 3.13 env only `numpy`, `onnxruntime`, `opencv-python-headless`, and `PyYAML` are installed. `insightface`, `sqlalchemy`, `faiss`, `fastapi`, and `pytest` are listed but absent — importing them fails. Note `insightface` pulls in `torch`, but inference is meant to go through ONNX Runtime.
+`requirements.txt` is largely aspirational. In the default Python 3.13 env only `numpy`, `onnxruntime`, `opencv-python-headless`, `PyYAML`, and `cryptography` are installed (`pytest` was added manually). `insightface`, `sqlalchemy`, `faiss`, and `fastapi` are listed but absent — importing them fails. Note `insightface` pulls in `torch`, but inference is meant to go through ONNX Runtime.
 
 ## Architecture pointers
 
 - Entry: `main.py` (inserts repo root on `sys.path`, then `from src.pipeline import ...`).
 - Orchestrator: `src/pipeline/pipeline.py` → `FacePipeline.process_frame` runs detect → quality gate → align → embed → liveness → match.
 - `EnsembleExtractor.extract()` re-aligns internally, so `pipeline.py` aligns twice (harmless, but not where you'd expect).
+- `src/security/`: `KeyStore` (file/hardware backends), hash-chained `AuditLog`, and mTLS cert/context helpers. `Database` derives its Fernet key via `KeyStore` and records enrollment/verification/attendance events when an `audit_log` is passed; `FacePipeline` wires one via `PipelineConfig.audit_enabled`/`audit_log_path`.
 - `.gitignore` excludes `config/local.yaml`, `models/*`, `data/*`, `logs/*`, `certs/*`, and all `*.onnx/*.db/*.pem`.
