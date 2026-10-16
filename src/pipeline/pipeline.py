@@ -49,6 +49,10 @@ class PipelineConfig:
     recognition_max_threshold: float = 0.55
     recognition_update_rate: float = 0.05
     recognition_tta_enabled: bool = True
+    recognition_tta_rotations: bool = True
+    recognition_tta_brightness: bool = True
+    recognition_tta_rotation_angle: float = 15.0
+    recognition_tta_brightness_factor: float = 0.1
 
     # Liveness
     liveness_ear_threshold: float = 0.25
@@ -121,7 +125,10 @@ class FacePipeline:
                     name=model_info["name"],
                     input_size=self.config.recognition_input_size,
                 )
-                recognition_models.append(model)
+                if model.is_loaded:
+                    recognition_models.append(model)
+                else:
+                    print(f"Warning: Could not load recognition model {model_info['name']}: {model.load_error}")
             except Exception as e:
                 print(f"Warning: Could not load recognition model {model_info['name']}: {e}")
 
@@ -132,6 +139,10 @@ class FacePipeline:
             models=recognition_models,
             weights=[m["weight"] for m in self.config.recognition_models],
             tta_enabled=self.config.recognition_tta_enabled,
+            tta_rotations=self.config.recognition_tta_rotations,
+            tta_brightness=self.config.recognition_tta_brightness,
+            tta_rotation_angle=self.config.recognition_tta_rotation_angle,
+            tta_brightness_factor=self.config.recognition_tta_brightness_factor,
         )
         self.aligner = FaceAligner()
         self.matcher = FaceMatcher(
@@ -140,6 +151,7 @@ class FacePipeline:
             min_threshold=self.config.recognition_min_threshold,
             max_threshold=self.config.recognition_max_threshold,
             update_rate=self.config.recognition_update_rate,
+            history_size=100,
         )
 
         # Liveness
