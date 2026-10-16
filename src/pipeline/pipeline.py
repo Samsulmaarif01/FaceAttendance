@@ -18,6 +18,7 @@ from src.recognition.extractor import (
 )
 from src.liveness.detector import LivenessDetector, LivenessResult
 from src.database.database import Database, BioHasher, User, AttendanceRecord
+from src.security.audit import AuditLog
 
 
 @dataclass
@@ -64,6 +65,10 @@ class PipelineConfig:
     database_path: str = "data/attendance.db"
     database_encryption_key: Optional[bytes] = None
     database_biohash_token: Optional[bytes] = None
+
+    # Security
+    audit_enabled: bool = True
+    audit_log_path: str = "logs/audit.log"
 
     # System
     frame_skip: int = 2  # Process every Nth frame to save CPU
@@ -162,12 +167,25 @@ class FacePipeline:
             min_frames_for_decision=self.config.liveness_min_frames,
         )
 
+        # Audit log
+        self.audit_log = AuditLog(self.config.audit_log_path) if self.config.audit_enabled else None
+
         # Database
         self.database = Database(
             db_path=self.config.database_path,
             encryption_key=self.config.database_encryption_key,
             biohash_token=self.config.database_biohash_token,
+            audit_log=self.audit_log,
         )
+
+        if self.audit_log is not None:
+            self.audit_log.log(
+                "pipeline_initialized",
+                details={
+                    "recognition_models": len(self.ensemble_extractor.models),
+                    "detector_loaded": self.detector is not None,
+                },
+            )
 
         # State
         self.liveness_states: Dict[str, LivenessDetector] = {}  # Track liveness per face (by track ID)
