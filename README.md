@@ -42,9 +42,10 @@ graph TD
 
 **Fase 6: UX** (implemented)
 - **Local web UI** – browser dashboard (`src/dashboard/`) served by the FastAPI app in `src/api/`; webcam capture + overlay, no Docker
+- **Real face tracking (demo)** – when no SCRFD model is present the pipeline uses a vendored **YuNet** detector (`src/detection/yunet.py`) to locate faces, instead of a fixed dummy box
 - **Self-service enrollment** – enroll a face from the browser or an uploaded image (`POST /api/enroll`)
 - **Live recognition + attendance** – `POST /api/recognize` draws bounding boxes/labels and logs attendance
-- **Demo mode** – runs without ONNX models using `SyntheticEmbeddingModel` (`PipelineConfig.demo_mode` / `create_demo_config`)
+- **Demo mode** – runs without ONNX recognition models using `SyntheticEmbeddingModel` (`PipelineConfig.demo_mode` / `create_demo_config`)
 - **API surface** – `/api/health`, `/api/recognize`, `/api/enroll`, `/api/users`, `/api/attendance`, `/api/stats`, `/api/sync`
 
 <details>
@@ -111,9 +112,12 @@ src/
 ├── camera/           # Camera capture & hardware abstraction
 │   ├── __init__.py
 │   └── capture.py
-├── detection/        # Face detection with SCRFD
+├── detection/        # Face detection (SCRFD; YuNet fallback)
 │   ├── __init__.py
-│   └── detector.py
+│   ├── detector.py   # SCRFD ONNX detector + quality gate
+│   ├── yunet.py      # YuNet fallback (model-free, tracks real faces)
+│   └── data/         # Vendored YuNet ONNX (Apache-2.0, OpenCV Zoo)
+│       └── face_detection_yunet_2023mar.onnx
 ├── recognition/      # Embedding extraction with ensemble
 │   ├── __init__.py
 │   └── extractor.py
@@ -251,10 +255,14 @@ without ONNX models using a synthetic embedding model, so you can exercise the
 UI, enrollment, and attendance flow end-to-end.
 
 - Start: `python -X utf8 main.py --web --demo`, open `http://127.0.0.1:8000`
+- Detection: with no SCRFD model the pipeline loads a vendored **YuNet** model so the
+  overlay actually follows your face; `PipelineConfig.detector_backend` selects
+  `"auto" | "scrfd" | "yunet" | "dummy"`.
 - Webcam requires `localhost`/HTTPS (a secure context); `127.0.0.1` is fine.
-- Demo mode tests the **flow/UI**, not real face accuracy — real accuracy needs
-  `.onnx` models in `models/` (gitignored) and `--real`.
-- Tests: `python -X utf8 -m pytest tests/api tests/recognition -v`
+- Demo mode tests the **flow/UI**, not real face accuracy — recognition uses synthetic
+  embeddings, so recognize/enroll round-trips match best on the same image. Real accuracy
+  needs `.onnx` recognition models in `models/` and `--real`.
+- Tests: `python -X utf8 -m pytest tests/api tests/recognition tests/detection -v`
 
 ### Development Guidelines
 
@@ -286,10 +294,11 @@ UI, enrollment, and attendance flow end-to-end.
 
 5. **Phase 6**: UX ✅
    - Real-time overlays (browser canvas)
+   - Real face tracking via vendored YuNet fallback detector
    - Self-service enrollment (`POST /api/enroll`)
    - Web dashboard (`src/dashboard/`, served by `src/api/`)
-   - Demo mode without ONNX models (`SyntheticEmbeddingModel`)
-   - Tests: `python -X utf8 -m pytest tests/api tests/recognition -v`
+   - Demo mode without ONNX recognition models (`SyntheticEmbeddingModel`)
+   - Tests: `python -X utf8 -m pytest tests/api tests/recognition tests/detection -v`
 
 6. **Phase 7**: Production deployment
    - Optional Docker containers
