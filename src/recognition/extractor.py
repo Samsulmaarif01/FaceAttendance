@@ -260,18 +260,28 @@ class FaceMatcher:
         if best_user is None:
             return None
 
-        # Get adaptive threshold with history-based calculation
-        user_threshold = self._get_adaptive_threshold(best_user, best_similarity)
+        return self.decide(best_user, best_similarity)
 
-        distance = 1.0 - best_similarity
-        matched = best_similarity >= user_threshold
+    def decide(
+        self,
+        user_id: str,
+        similarity: float,
+        name: Optional[str] = None,
+    ) -> MatchResult:
+        """Apply the (adaptive) threshold for a single candidate.
 
+        Exposed so alternative search backends (e.g. an ANN index) can reuse the
+        thresholding logic without duplicating it.
+        """
+        user_threshold = self._get_adaptive_threshold(user_id, similarity)
+        distance = 1.0 - similarity
+        matched = bool(similarity >= user_threshold)
         return MatchResult(
-            user_id=best_user,
-            name=best_user,  # Will be replaced with actual name
-            similarity=best_similarity,
-            distance=distance,
-            threshold=user_threshold,
+            user_id=user_id,
+            name=name or user_id,
+            similarity=float(similarity),
+            distance=float(distance),
+            threshold=float(user_threshold),
             matched=matched,
         )
 

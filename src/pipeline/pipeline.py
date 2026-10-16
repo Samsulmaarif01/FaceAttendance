@@ -78,6 +78,11 @@ class PipelineConfig:
     sync_queue_max_size: int = 10000
     sync_transport: Optional[object] = None  # injectable transport; NullTransport if None
 
+    # Scalability (phase 5)
+    matcher_backend: str = "linear"  # "linear" | "indexed"
+    index_backend: str = "auto"      # "auto" | "brute_force" | "faiss"
+    index_use_hnsw: bool = False
+
     # System
     frame_skip: int = 2  # Process every Nth frame to save CPU
     display_output: bool = True
@@ -158,14 +163,32 @@ class FacePipeline:
             tta_brightness_factor=self.config.recognition_tta_brightness_factor,
         )
         self.aligner = FaceAligner()
-        self.matcher = FaceMatcher(
-            threshold=self.config.recognition_threshold,
-            adaptive_enabled=self.config.recognition_adaptive_enabled,
-            min_threshold=self.config.recognition_min_threshold,
-            max_threshold=self.config.recognition_max_threshold,
-            update_rate=self.config.recognition_update_rate,
-            history_size=100,
-        )
+        if self.config.matcher_backend == "indexed":
+            from src.index import IndexedMatcher, create_index
+
+            index = create_index(
+                self.config.index_backend,
+                dim=512,  # face embedding dimensionality
+                use_hnsw=self.config.index_use_hnsw,
+            )
+            self.matcher = IndexedMatcher(
+                threshold=self.config.recognition_threshold,
+                index=index,
+                adaptive_enabled=self.config.recognition_adaptive_enabled,
+                min_threshold=self.config.recognition_min_threshold,
+                max_threshold=self.config.recognition_max_threshold,
+                update_rate=self.config.recognition_update_rate,
+                history_size=100,
+            )
+        else:
+            self.matcher = FaceMatcher(
+                threshold=self.config.recognition_threshold,
+                adaptive_enabled=self.config.recognition_adaptive_enabled,
+                min_threshold=self.config.recognition_min_threshold,
+                max_threshold=self.config.recognition_max_threshold,
+                update_rate=self.config.recognition_update_rate,
+                history_size=100,
+            )
 
         # Liveness
         self.liveness_detector = LivenessDetector(
