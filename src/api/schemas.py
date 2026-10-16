@@ -42,6 +42,7 @@ class FaceResult(BaseModel):
     match: Optional[MatchInfo] = None
     attendance_logged: bool = False
     attendance_duplicate: bool = False
+    attendance_duplicate_at: Optional[str] = None
     attendance_status: str = "no_match"
     direction: str = "in"
 

@@ -271,7 +271,9 @@ and **Pengaturan Kamera/Sistem**.
   `direction=out` is blocked until the user has checked in (`attendance_status="not_checked_in"`);
   `?log=false` recognizes without recording. Each face also reports `attendance_logged`.
 - **Success popup**: a toast ("Absen masuk/pulang berhasil", name + time) appears when a record
-  is written; repeats/blocked cases show a distinct info/error toast instead.
+  is written; a repeat shows an amber **"Anda sudah presensi masuk hari ini (08:14)"** marker
+  (`attendance_duplicate_at`), and checkout-before-checkin shows a red **"Anda belum melakukan
+  presensi masuk"** alert. The verification card repeats the reason persistently (chip + viewfinder line).
 - **Delete user** / **Clear attendance**: buttons in the dashboard (`DELETE /api/users/{id}`,
   `DELETE /api/attendance`).
 - **Theme**: a sun/moon toggle in the header switches dark ⇄ light ("white mode"); the

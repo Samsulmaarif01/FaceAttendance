@@ -153,6 +153,7 @@ class TestAttendanceDirection:
         face = client.post("/api/recognize?direction=in", files=_files(6)).json()["faces"][0]
         assert face["attendance_logged"] is False
         assert face["attendance_status"] == "duplicate"
+        assert face["attendance_duplicate_at"] is not None
         assert client.get("/api/stats").json()["total"] == 1
 
     def test_invalid_direction_is_rejected(self, client):

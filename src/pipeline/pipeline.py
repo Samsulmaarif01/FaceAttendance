@@ -322,6 +322,7 @@ class FacePipeline:
             match_result = None
             attendance_logged = False
             attendance_duplicate = False
+            attendance_duplicate_at = None
             attendance_blocked = ""
             if liveness_result.is_live:
                 # Get user templates from database (this is a simplification)
@@ -344,6 +345,7 @@ class FacePipeline:
                             attendance_blocked = "not_checked_in"
                         elif self.database.has_attendance_today(uid, direction):
                             attendance_duplicate = True
+                            attendance_duplicate_at = self.database.get_today_record(uid, direction)
                         elif log_attendance and self._should_log_attendance(uid, direction):
                             record_id = self.database.log_attendance(
                                 user_id=uid,
@@ -381,6 +383,7 @@ class FacePipeline:
                 "face_roi": face_roi,
                 "attendance_logged": attendance_logged,
                 "attendance_duplicate": attendance_duplicate,
+                "attendance_duplicate_at": attendance_duplicate_at,
                 "attendance_blocked": attendance_blocked,
                 "attendance_status": attendance_status,
                 "direction": direction,

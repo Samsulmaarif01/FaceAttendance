@@ -45,7 +45,28 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&
 
 const initials = (s) => String(s || "?").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
 
-const fmtTime = (iso) => (iso ? iso.slice(0, 19).replace("T", " ") : "—");
+// Attendance timestamps are stored as naive UTC ISO strings; render them in the
+// viewer's local time so they match the on-screen clock.
+function toLocalDate(iso) {
+  if (!iso) return null;
+  const s = String(iso);
+  const d = new Date(/[Z+]/.test(s.slice(10)) ? s : s + "Z");
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function fmtTime(iso) {
+  const d = toLocalDate(iso);
+  if (!d) return iso ? String(iso).slice(0, 19).replace("T", " ") : "—";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function fmtClock(iso) {
+  const d = toLocalDate(iso);
+  if (!d) return "—";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 
 function greetWord() {
   const h = new Date().getHours();
@@ -111,7 +132,8 @@ function toastForFace(face) {
   lastStatusByUser[uid] = status;
 
   if (status === "duplicate") {
-    showToast(`Sudah absen ${dir} hari ini`, `${name} sudah tercatat — tidak dicatat dua kali`, "info");
+    const at = face.attendance_duplicate_at ? ` pukul ${fmtClock(face.attendance_duplicate_at)}` : "";
+    showToast(`Anda sudah presensi ${dir} hari ini`, `${name} tercatat${at} — tidak dicatat lagi`, "info");
   } else if (status === "not_checked_in") {
     showToast("Anda belum melakukan presensi masuk", `${name} harus absen masuk dulu sebelum absen pulang`, "err");
   } else if (status === "skipped" || status === "unknown") {
@@ -290,37 +312,41 @@ function updateMatchCard(face) {
   $("match-role").textContent = "Pengguna terverifikasi";
   $("match-uid").textContent = `NIK: ${m.user_id}`;
   $("match-similarity").textContent = `${(m.similarity * 100).toFixed(1)}% Cocok`;
-  $("match-when").textContent = "Baru saja";
+  $("match-when").textContent = status === "duplicate" && face.attendance_duplicate_at
+    ? `Tercatat ${fmtClock(face.attendance_duplicate_at)}`
+    : status === "logged" ? "Baru saja" : "Terverifikasi";
 
   const chipText = {
     logged: `Presensi ${dirTitle} Berhasil`,
-    duplicate: `Sudah Absen ${dirTitle} Hari Ini`,
+    duplicate: `Sudah Presensi ${dirTitle} Hari Ini`,
     not_checked_in: "Anda Belum Presensi Masuk",
     skipped: "Terverifikasi",
   }[status] || "Terverifikasi";
-  $("match-state-chip").className = "chip " + (status === "not_checked_in" ? "error" : status === "logged" ? "primary-outline" : "");
+  const chipTone = status === "not_checked_in" ? "error" : status === "duplicate" ? "warn" : status === "logged" ? "primary-outline" : "";
+  $("match-state-chip").className = "chip" + (chipTone ? " " + chipTone : "");
   $("match-state-chip").innerHTML = `<span class="dot pulse"></span>${chipText}`;
 
+  const dupAt = face.attendance_duplicate_at ? ` (${fmtClock(face.attendance_duplicate_at)})` : "";
   // Persistent on-screen reason (the toast is transient).
   $("vf-sub").textContent = status === "not_checked_in"
     ? "Anda belum melakukan presensi masuk hari ini"
     : status === "logged"
       ? `Absen ${dir} tercatat ${new Date().toLocaleTimeString("id-ID", { hour12: false })}`
       : status === "duplicate"
-        ? `Sudah absen ${dir} hari ini`
+        ? `Anda sudah presensi ${dir} hari ini${dupAt}`
         : "Pengenalan langsung aktif";
 
   const attText = {
     logged: `Absen ${dir} tercatat`,
-    duplicate: `Sudah ${dir} hari ini`,
+    duplicate: `Sudah ${dir}${dupAt}`,
     not_checked_in: "Wajib absen masuk dulu",
   }[status] || (info.count ? `Hadir ${info.count}×` : "Kehadiran baru");
   $("match-att").textContent = attText;
 
   const greetMsg = {
     logged: `Presensi ${dir} kamu berhasil terdata di sistem lokal. Have a wonderful and productive day!`,
-    duplicate: `Presensi ${dir} hari ini sudah tercatat sebelumnya — tidak dicatat dua kali.`,
-    not_checked_in: "Belum ada presensi masuk hari ini, jadi presensi pulang belum bisa dicatat.",
+    duplicate: `Anda sudah melakukan presensi ${dir} hari ini${dupAt} — tidak dicatat dua kali.`,
+    not_checked_in: "Anda belum melakukan presensi masuk hari ini, jadi presensi pulang belum bisa dicatat.",
     skipped: "Wajah terverifikasi (mode pengenalan tanpa pencatatan absensi).",
   }[status] || "Wajah terverifikasi.";
   $("greet-name").textContent = `${greetWord()}, ${String(name).split(" ")[0]}!`;

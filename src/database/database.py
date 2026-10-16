@@ -362,6 +362,24 @@ class Database:
             ).fetchone()
         return row is not None
 
+    def get_today_record(
+        self,
+        user_id: str,
+        direction: str = "in",
+        now: Optional[datetime] = None,
+    ) -> Optional[str]:
+        """Return the timestamp of today's record for ``direction``, if any."""
+        direction = "out" if str(direction).lower() in ("out", "pulang") else "in"
+        start, end = self._local_day_bounds(now)
+        with self._get_conn() as conn:
+            row = conn.execute(
+                """SELECT timestamp FROM attendance
+                   WHERE user_id = ? AND direction = ? AND timestamp >= ? AND timestamp < ?
+                   ORDER BY timestamp DESC LIMIT 1""",
+                (user_id, direction, start, end),
+            ).fetchone()
+        return row["timestamp"] if row else None
+
     def get_today_status(self, now: Optional[datetime] = None) -> Dict[str, Dict[str, bool]]:
         """Per-user check-in/out status for the local day (user_id -> {in, out})."""
         start, end = self._local_day_bounds(now)

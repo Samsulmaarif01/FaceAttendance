@@ -57,6 +57,7 @@ def _serialize_face(result: dict) -> dict:
         "match": None,
         "attendance_logged": bool(result.get("attendance_logged", False)),
         "attendance_duplicate": bool(result.get("attendance_duplicate", False)),
+        "attendance_duplicate_at": result.get("attendance_duplicate_at"),
         "attendance_status": result.get("attendance_status", "no_match"),
         "direction": result.get("direction", "in"),
     }
