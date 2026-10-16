@@ -79,6 +79,9 @@ models/*
 *.weights
 *.h5
 
+# Vendored model-free detector (small, committed on purpose)
+!src/detection/data/*.onnx
+
 # Logs & audit logs
 logs/*
 !logs/.gitkeep
