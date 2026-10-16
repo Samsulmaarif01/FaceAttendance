@@ -43,10 +43,11 @@ graph TD
 **Fase 6: UX** (implemented)
 - **Local web UI** – browser dashboard (`src/dashboard/`) served by the FastAPI app in `src/api/`; webcam capture + overlay, no Docker
 - **Real face tracking (demo)** – when no SCRFD model is present the pipeline uses a vendored **YuNet** detector (`src/detection/yunet.py`) to locate faces, instead of a fixed dummy box
-- **Self-service enrollment** – enroll a face from the browser or an uploaded image (`POST /api/enroll`)
-- **Live recognition + attendance** – `POST /api/recognize` draws bounding boxes/labels and logs attendance
+- **Self-service enrollment** – enroll from the browser webcam or **from a photo** (`POST /api/enroll`); the photo path is enroll-only and never writes attendance
+- **Live recognition + attendance** – `POST /api/recognize` draws bounding boxes/labels and logs attendance, **throttled to one record per user per window** (`PipelineConfig.attendance_throttle_seconds`, default 60s). `?log=false` recognizes without recording
+- **Manage data** – delete a user (`DELETE /api/users/{id}`), clear attendance (`DELETE /api/attendance`), per-user last-attendance in `/api/users`
 - **Demo mode** – runs without ONNX recognition models using `SyntheticEmbeddingModel` (`PipelineConfig.demo_mode` / `create_demo_config`)
-- **API surface** – `/api/health`, `/api/recognize`, `/api/enroll`, `/api/users`, `/api/attendance`, `/api/stats`, `/api/sync`
+- **API surface** – `/api/health`, `/api/recognize`, `/api/enroll`, `/api/users`, `/api/attendance`, `/api/stats`, `/api/sync` (+ `DELETE` variants)
 
 <details>
 <summary>Fase 5: Scalability (implemented)</summary>
@@ -258,6 +259,12 @@ UI, enrollment, and attendance flow end-to-end.
 - Detection: with no SCRFD model the pipeline loads a vendored **YuNet** model so the
   overlay actually follows your face; `PipelineConfig.detector_backend` selects
   `"auto" | "scrfd" | "yunet" | "dummy"`.
+- **Enroll captured face**: registers the current webcam frame (needs camera + name).
+- **Register from image…**: enrolls a face from a photo **only** — it never writes attendance.
+- **Attendance is throttled**: at most one record per user per `attendance_throttle_seconds`
+  window (default 60s); `POST /api/recognize?log=false` recognizes without recording.
+- **Delete user** / **Clear attendance**: buttons in the dashboard (`DELETE /api/users/{id}`,
+  `DELETE /api/attendance`).
 - Webcam requires `localhost`/HTTPS (a secure context); `127.0.0.1` is fine.
 - Demo mode tests the **flow/UI**, not real face accuracy — recognition uses synthetic
   embeddings, so recognize/enroll round-trips match best on the same image. Real accuracy
