@@ -4,7 +4,7 @@ Compact operating notes for this repo. See `CLAUDE.md` for the design vision and
 
 ## Reality check (read before editing)
 
-- This is a **Phase 1 skeleton with Phase 2/3 additions**. `src/camera`, `src/detection`, `src/recognition`, `src/liveness`, `src/database`, `src/pipeline` contain the running pipeline; `src/security` now has `keystore.py`, `audit.py`, `tls.py`. `src/api`, `src/dashboard`, `src/sync` are empty packages (`__init__.py` only); `src/sync` mTLS not yet wired.
+- This is a **Phase 1 skeleton with Phase 2/3/4 additions**. `src/camera`, `src/detection`, `src/recognition`, `src/liveness`, `src/database`, `src/pipeline` contain the running pipeline; `src/security` has `keystore.py`, `audit.py`, `tls.py`; `src/sync` now has `crdt.py`, `backoff.py`, `compression.py`, `queue.py`, `signing.py`, `sync_manager.py`. `src/api`, `src/dashboard` are still empty packages (`__init__.py` only). Sync is network-agnostic: `SyncQueue` is **CRDT-backed** (LWW-Element-Set), uploads are **zstd-compressed delta payloads signed with Ed25519**, but no real mTLS socket is wired (transport is injected; `NullTransport` models "offline"). `Database` takes an optional `sync_queue` and enqueues enrollment/template/delete events; `FacePipeline` builds the queue before the DB and injects it.
 - `config/default.yaml` / `config/local.yaml` are **not loaded anywhere**. `pipeline.py` never imports `yaml`; all runtime config comes from the `PipelineConfig` dataclass in `src/pipeline/pipeline.py`. Editing YAML has no effect today.
 - `models/` is empty and gitignored; no `.onnx` files exist. `FacePipeline.__init__` raises `RuntimeError("No recognition models loaded")` when none load, so `python main.py` and `python main.py --test` both fail as-is (the `--test` path sets `recognition_models = []`, which still raises).
 - `process_frame` never actually matches anyone: `FacePipeline._get_user_templates()` (`src/pipeline/pipeline.py:283`) always returns `{}`.
@@ -22,12 +22,12 @@ python -X utf8 test_imports.py
 python -X utf8 test_pipeline.py          # 3 pass / 2 fail (liveness kwarg + no models)
 python -X utf8 test_pipeline_creation.py # fails: RuntimeError no recognition models
 
-# Real pytest suites (phase 2 + phase 3). pytest must be installed first.
+# Real pytest suites (phase 2 + phase 3 + phase 4). pytest must be installed first.
 python -m pytest tests/ -v
 ```
 
 - `test_pipeline.py` failure 1: it calls `LivenessDetector(min_frames=...)` but the param is `blink_frames`. Failure 2: `FacePipeline` needs loadable recognition models.
-- `tests/` has two populated suites: `tests/recognition/test_accuracy.py` (phase 2) and `tests/security/test_security.py` (phase 3); other `tests/*` dirs are empty (`__init__.py` only).
+- `tests/` has three populated suites: `tests/recognition/test_accuracy.py` (phase 2), `tests/security/test_security.py` (phase 3), and `tests/sync/test_sync.py` (phase 4); other `tests/*` dirs are empty (`__init__.py` only).
 
 ## Dependencies
 

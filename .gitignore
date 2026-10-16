@@ -106,6 +106,9 @@ htmlcov/
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints
 
+# Agent/workflow scratch (session plans, fetched context)
+.tmp/
+
 # IDEs and editors
 .idea/
 .vscode/*

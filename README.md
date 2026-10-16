@@ -4,17 +4,13 @@ Real-time face recognition attendance for CPU-only edge devices (Raspberry Pi 4,
 
 ## Project Status
 
-This is **Phase 1** of the implementation:
-- ✅ **Core Pipeline Architecture** – Camera → Detection → Recognition → Liveness → Database → Sync
-- ✅ **Folder Structure** – Complete module layout with `__init__.py` packages
-- ✅ **Core Modules Implemented**:
-  - **Camera**: OpenCV & PiCamera2 backends with config
-  - **Detection**: SCRFD detector with QualityGate
-  - **Recognition**: Ensemble of ArcFace/CosFace/MobileFaceNet with TTA
-  - **Liveness**: Basic blink + head movement detection
-  - **Database**: Encrypted SQLite with biohashing
-  - **Pipeline**: Full integration test and run loop
-- ⚠️ **Missing**: ONNX models, actual AI inference, hardware drivers
+Phases 1–4 of the roadmap are implemented (see `docs/system_design.md` §13.8):
+
+- ✅ **Phase 1 – Core Pipeline**: Camera → Detection → Recognition → Liveness → Database
+- ✅ **Phase 2 – Accuracy**: Test-time augmentation, adaptive per-user thresholds, hard-negative mining
+- ✅ **Phase 3 – Security**: `KeyStore` (TPM-ready), hash-chained `AuditLog`, mTLS helpers, biohashing
+- ✅ **Phase 4 – Offline-First**: LWW-Element-Set CRDT, exponential backoff, zstd delta compression, local autonomy
+- ⚠️ **Missing**: ONNX models, real mTLS socket wiring, FAISS vector index
 
 ## Project Overview
 
@@ -42,13 +38,14 @@ graph TD
 
 ### Current Phase
 
-**Fase 1: Core Pipeline**
-- Real-time frame capture and processing
-- Face detection with SCRFD (ONNX)
-- Multi-model recognition ensemble
-- Quality gating and liveness detection
-- Encrypted database with biohashing
-- Basic sync queue implementation
+**Fase 4: Offline-First** (implemented)
+- **CRDT** – `SyncQueue` is backed by an LWW-Element-Set (`src/sync/crdt.py` + `src/sync/queue.py`); enqueue = `add`, ack = tombstone, queues `merge()` conflict-free
+- **Exponential backoff** – jittered reconnection policy (`src/sync/backoff.py`)
+- **Delta + zstd** – uploads are zstd-compressed deltas signed with Ed25519 (`src/sync/compression.py`, `src/sync/signing.py`)
+- **Store-and-forward queue** – bounded queue with backpressure, tombstones, and persistence
+- **Local autonomy** – enrollment, template updates, deletions and attendance logging never require the network;
+  user/attendance events are queued and synced optionally (`SyncManager` in `src/sync/sync_manager.py`,
+  wired via `PipelineConfig.sync_enabled` / `Database.sync_queue`)
 
 ### What Works
 
@@ -93,6 +90,19 @@ src/
 ├── database/         # Encrypted SQLite storage
 │   ├── __init__.py
 │   └── database.py
+├── security/         # Key storage, audit log, mTLS helpers
+│   ├── __init__.py
+│   ├── keystore.py
+│   ├── audit.py
+│   └── tls.py
+├── sync/             # Offline-first: CRDT, backoff, compression, queue
+│   ├── __init__.py
+│   ├── crdt.py
+│   ├── backoff.py
+│   ├── compression.py
+│   ├── queue.py
+│   ├── signing.py
+│   └── sync_manager.py
 ├── pipeline/         # Main integration
 │   ├── __init__.py
 │   └── pipeline.py
@@ -105,6 +115,8 @@ tests/
 ├── recognition/      # Recognition tests
 ├── liveness/         # Liveness tests
 ├── database/         # Database tests
+├── security/         # Security (phase 3) tests
+├── sync/             # Offline-first (phase 4) tests
 └── pipeline/         # Integration tests
 
 config/
@@ -184,10 +196,12 @@ python main.py --test
    - TPM/secure element key storage
    - Mutual TLS for sync
 
-3. **Phase 4**: Offline-first
-   - CRDT for conflict-free sync
-   - Exponential backoff reconnection
-   - Delta compression
+3. **Phase 4**: Offline-first ✅
+   - CRDT (`LWWElementSet`)-backed `SyncQueue` for conflict-free sync
+   - Exponential backoff reconnection (with jitter)
+   - zstd delta-encoded uploads + Ed25519 signatures
+   - Bounded store-and-forward queue with local autonomy (enrollment + attendance)
+   - Tests: `python -X utf8 -m pytest tests/sync/ -v`
 
 4. **Phase 5**: Scalability
    - FAISS vector index
@@ -215,9 +229,10 @@ python main.py --test
 
 ### Current Limitations
 
-- No actual ONNX models for inference
+- No actual ONNX models for inference (pipeline needs models to construct)
 - Simplified liveness detection
-- Limited database features
+- Sync is network-agnostic: payloads are signed/compressed but no real mTLS socket is wired yet
+- `process_frame` matching still returns no templates (biohashed templates are non-invertible)
 - Basic camera support
 
 ### Next Steps
