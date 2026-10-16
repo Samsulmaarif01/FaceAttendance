@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>VeriFace AI — Presensi Pengenalan Wajah</title>
   <script>try { if (localStorage.getItem("vf-theme") === "light") document.documentElement.classList.add("light"); } catch (e) {}</script>
-  <link rel="stylesheet" href="/static/style.css?v=11" />
+  <link rel="stylesheet" href="/static/style.css?v=12" />
 </head>
 <body>
   <!-- Inline icon sprite (offline, no icon font needed) -->
@@ -112,7 +112,7 @@
             <p class="muted">Sistem verifikasi biometrik nirsentuh berkecepatan tinggi dengan proteksi anti-spoofing cerdas.</p>
           </div>
           <div class="mode-toggle">
-            <button class="mode-btn active" id="btn-mode-in"><svg class="icon"><use href="#i-check"/></svg><span>Presensi Masuk</span></button>
+            <button class="mode-btn" id="btn-mode-in"><svg class="icon"><use href="#i-check"/></svg><span>Presensi Masuk</span></button>
             <button class="mode-btn" id="btn-mode-out"><svg class="icon"><use href="#i-history"/></svg><span>Presensi Pulang</span></button>
           </div>
         </div>
@@ -184,12 +184,12 @@
             <div class="tips-bar">
               <span class="tips-icon"><svg class="icon"><use href="#i-lamp"/></svg></span>
               <div>
-                <p class="strong">Presensi masuk &amp; pulang masing-masing sekali per hari</p>
-                <p class="muted tiny">Absen pulang hanya bisa setelah absen masuk hari ini. Gunakan tombol Masuk/Pulang (F1/F2) untuk memilih jenis.</p>
+                <p class="strong">Pilih Masuk / Pulang dulu — absensi tidak dicatat otomatis</p>
+                <p class="muted tiny">Kalau belum absen masuk, tombol Pulang akan menampilkan peringatan merah. Masing-masing jenis hanya tercatat sekali per hari (F1/F2).</p>
               </div>
             </div>
 
-            <p id="status" class="status">Siap. Mulai kamera untuk pengenalan langsung.</p>
+            <p id="status" class="status">Siap. Mulai kamera, lalu pilih mode Presensi Masuk atau Pulang. Absensi baru dicatat setelah mode dipilih.</p>
           </div>
 
           <div class="col-match">
@@ -380,6 +380,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=11"></script>
+  <script src="/static/app.js?v=12"></script>
 </body>
 </html>

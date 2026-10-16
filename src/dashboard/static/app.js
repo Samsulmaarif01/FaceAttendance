@@ -14,7 +14,7 @@ let loopTimer = null;
 let frameW = 0;
 let frameH = 0;
 let userMap = {}; // id -> { name, count }
-let mode = "in"; // "in" (masuk) | "out" (pulang)
+let mode = null; // null = not chosen yet (no attendance is written); "in" | "out"
 const DIR = { in: "masuk", out: "pulang" };
 const DIR_TITLE = { in: "Masuk", out: "Pulang" };
 
@@ -198,8 +198,12 @@ async function startCamera() {
     if (stageEl) stageEl.classList.remove("photo-mode");
     setTracking(false);
     $("btn-camera").querySelector("span").textContent = "Hentikan Kamera";
-    $("vf-sub").textContent = "Pengenalan langsung aktif";
-    setStatus("Kamera aktif. Pengenalan langsung berjalan.", "ok");
+    $("vf-sub").textContent = mode === null
+      ? "Pilih mode Presensi Masuk / Pulang untuk mencatat absensi"
+      : "Pengenalan langsung aktif";
+    setStatus(mode === null
+      ? "Kamera aktif. Pilih mode Presensi Masuk atau Pulang untuk mulai mencatat absensi."
+      : "Kamera aktif. Pengenalan langsung berjalan.", mode === null ? "info" : "ok");
     return true;
   } catch (e) {
     setStatus("Kamera tidak tersedia: " + e.message + " — Anda masih bisa memakai Daftar dari gambar.", "err");
@@ -287,22 +291,24 @@ function drawRegisteredLabel(name) {
   ctx.fillText(label, 6, boxH / 2);
 }
 
-async function recognizeBlob(blob, direction) {
+async function recognizeBlob(blob, direction, log) {
   const fd = new FormData();
   fd.append("file", blob, "frame.jpg");
-  const data = await fetchJSON(`/api/recognize?direction=${direction || "in"}`, { method: "POST", body: fd });
+  const qs = `direction=${direction || "in"}&log=${log ? "true" : "false"}`;
+  const data = await fetchJSON(`/api/recognize?${qs}`, { method: "POST", body: fd });
   drawFaces(data.faces);
   return data;
 }
 
 /* ── Instant match card ────────────────────────────────────── */
-function updateMatchCard(face) {
+function updateMatchCard(face, recording) {
   const m = face.match;
   const name = m.name || m.user_id;
   const info = userMap[m.user_id] || {};
   const dir = DIR[face.direction] || "masuk";
   const dirTitle = DIR_TITLE[face.direction] || "Masuk";
-  const status = face.attendance_status || (face.attendance_logged ? "logged" : "skipped");
+  let status = face.attendance_status || (face.attendance_logged ? "logged" : "skipped");
+  if (recording === false) status = "idle";
 
   $("match-empty").hidden = true;
   $("match-body").hidden = false;
@@ -320,6 +326,7 @@ function updateMatchCard(face) {
     logged: `Presensi ${dirTitle} Berhasil`,
     duplicate: `Sudah Presensi ${dirTitle} Hari Ini`,
     not_checked_in: "Anda Belum Presensi Masuk",
+    idle: "Pilih Mode Absensi",
     skipped: "Terverifikasi",
   }[status] || "Terverifikasi";
   const chipTone = status === "not_checked_in" ? "error" : status === "duplicate" ? "warn" : status === "logged" ? "primary-outline" : "";
@@ -328,18 +335,21 @@ function updateMatchCard(face) {
 
   const dupAt = face.attendance_duplicate_at ? ` (${fmtClock(face.attendance_duplicate_at)})` : "";
   // Persistent on-screen reason (the toast is transient).
-  $("vf-sub").textContent = status === "not_checked_in"
-    ? "Anda belum melakukan presensi masuk hari ini"
-    : status === "logged"
-      ? `Absen ${dir} tercatat ${new Date().toLocaleTimeString("id-ID", { hour12: false })}`
-      : status === "duplicate"
-        ? `Anda sudah presensi ${dir} hari ini${dupAt}`
-        : "Pengenalan langsung aktif";
+  $("vf-sub").textContent = status === "idle"
+    ? "Pilih mode Presensi Masuk / Pulang untuk mencatat absensi"
+    : status === "not_checked_in"
+      ? "Anda belum melakukan presensi masuk hari ini"
+      : status === "logged"
+        ? `Absen ${dir} tercatat ${new Date().toLocaleTimeString("id-ID", { hour12: false })}`
+        : status === "duplicate"
+          ? `Anda sudah presensi ${dir} hari ini${dupAt}`
+          : "Pengenalan langsung aktif";
 
   const attText = {
     logged: `Absen ${dir} tercatat`,
     duplicate: `Sudah ${dir}${dupAt}`,
     not_checked_in: "Wajib absen masuk dulu",
+    idle: "Belum dicatat",
   }[status] || (info.count ? `Hadir ${info.count}×` : "Kehadiran baru");
   $("match-att").textContent = attText;
 
@@ -347,13 +357,14 @@ function updateMatchCard(face) {
     logged: `Presensi ${dir} kamu berhasil terdata di sistem lokal. Have a wonderful and productive day!`,
     duplicate: `Anda sudah melakukan presensi ${dir} hari ini${dupAt} — tidak dicatat dua kali.`,
     not_checked_in: "Anda belum melakukan presensi masuk hari ini, jadi presensi pulang belum bisa dicatat.",
+    idle: "Wajah dikenali, tetapi belum ada mode absensi yang dipilih — tidak ada yang dicatat.",
     skipped: "Wajah terverifikasi (mode pengenalan tanpa pencatatan absensi).",
   }[status] || "Wajah terverifikasi.";
   $("greet-name").textContent = `${greetWord()}, ${String(name).split(" ")[0]}!`;
   $("greet-msg").textContent = greetMsg;
 
   $("match-time").textContent = new Date().toLocaleTimeString("id-ID", { hour12: false });
-  $("match-time-tag").textContent = status === "logged" ? `Baru dicatat (${dir})` : status === "duplicate" ? "Sudah tercatat" : "Tidak dicatat";
+  $("match-time-tag").textContent = status === "logged" ? `Baru dicatat (${dir})` : status === "duplicate" ? `Tercatat${dupAt}` : "Tidak dicatat";
   $("match-score").textContent = m.similarity.toFixed(3);
   $("match-id").textContent = m.user_id;
   $("match-conf").textContent = `Conf ${(face.confidence || 0).toFixed(2)}`;
@@ -365,16 +376,29 @@ async function liveLoop() {
   if (!$("chk-live").checked || !stream || !photo.hidden) return;
   try {
     const blob = await captureBlob();
-    const data = await recognizeBlob(blob, mode);
+    const recording = mode !== null;
+    const data = await recognizeBlob(blob, mode || "in", recording);
     setTracking(data.count > 0);
     $("vf-elapsed").textContent = `AI ${data.elapsed_ms}ms`;
     $("latency-value").textContent = `${data.elapsed_ms}ms (Optimal)`;
     const matched = data.faces.filter((f) => f.match && f.match.matched);
+    if (!recording) {
+      // No mode chosen yet: recognise only, never write attendance.
+      if (matched.length) {
+        setStatus(`Terdeteksi: ${matched.map((f) => f.match.name).join(", ")} — pilih mode Masuk/Pulang untuk mencatat absensi.`, "info");
+        updateMatchCard(matched[0], false);
+      } else if (data.count > 0) {
+        setStatus(`${data.count} wajah terdeteksi (${data.elapsed_ms} ms)`, "info");
+      } else {
+        setStatus(`Tidak ada wajah terdeteksi (${data.elapsed_ms} ms)`, "info");
+      }
+      return;
+    }
     if (matched.length) {
       const names = matched.map((f) => f.match.name);
       setStatus(`Terdeteksi (${DIR[matched[0].direction] || "masuk"}): ${names.join(", ")} (${data.elapsed_ms} ms)`, "ok");
       for (const f of matched) toastForFace(f);
-      updateMatchCard(matched[0]);
+      updateMatchCard(matched[0], true);
       refreshAttendance();
       refreshStats();
       refreshUsers();

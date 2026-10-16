@@ -266,6 +266,9 @@ and **Pengaturan Kamera/Sistem**.
   `"auto" | "scrfd" | "yunet" | "dummy"`.
 - **Enroll captured face**: registers the current webcam frame (needs camera + name).
 - **Register from image…**: enrolls a face from a photo **only** — it never writes attendance.
+- **Nothing is recorded until a mode is chosen**: the live scan recognises faces but writes
+  attendance only after you press **Presensi Masuk** or **Presensi Pulang** (F1/F2). No mode
+  selected ⇒ `?log=false`, so the "pulang" button can never silently write a "masuk".
 - **One check-in + one check-out per day**: `POST /api/recognize?direction=in|out` (default `in`).
   A repeat of the same direction the same day is ignored (`attendance_status="duplicate"`), and
   `direction=out` is blocked until the user has checked in (`attendance_status="not_checked_in"`);
