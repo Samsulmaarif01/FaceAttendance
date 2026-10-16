@@ -85,6 +85,9 @@ class PipelineConfig:
     index_backend: str = "auto"      # "auto" | "brute_force" | "faiss"
     index_use_hnsw: bool = False
 
+    # Attendance (phase 6)
+    attendance_throttle_seconds: float = 60.0  # at most one record per user per window
+
     # Demo / testing (phase 6). When enabled, the pipeline runs without ONNX
     # models: a synthetic embedding model is used and liveness is bypassed.
     demo_mode: bool = False
@@ -272,9 +275,12 @@ class FacePipeline:
         self.camera.stop()
         cv2.destroyAllWindows()
 
-    def process_frame(self, frame: np.ndarray) -> List[Dict]:
+    def process_frame(self, frame: np.ndarray, log_attendance: bool = True) -> List[Dict]:
         """
         Process a single frame and return list of results for each detected face.
+
+        Set ``log_attendance=False`` to recognize without writing attendance
+        (e.g. the web preview / uploaded-image path).
         """
         self.frame_count += 1
 
@@ -319,19 +325,21 @@ class FacePipeline:
                     if match_result and match_result.matched:
                         # Update adaptive threshold
                         self.matcher.update_threshold(match_result.user_id, match_result.similarity)
-                        # Log attendance locally (works offline)
-                        record_id = self.database.log_attendance(
-                            user_id=match_result.user_id,
-                            similarity=match_result.similarity,
-                            liveness_score=liveness_result.score,
-                        )
-                        # Enqueue for sync (no-op when sync is disabled)
-                        self._enqueue_sync(
-                            record_id=record_id,
-                            user_id=match_result.user_id,
-                            similarity=match_result.similarity,
-                            liveness_score=liveness_result.score,
-                        )
+                        # Log attendance locally (works offline), throttled to one
+                        # record per user per `attendance_throttle_seconds` window.
+                        if log_attendance and self._should_log_attendance(match_result.user_id):
+                            record_id = self.database.log_attendance(
+                                user_id=match_result.user_id,
+                                similarity=match_result.similarity,
+                                liveness_score=liveness_result.score,
+                            )
+                            # Enqueue for sync (no-op when sync is disabled)
+                            self._enqueue_sync(
+                                record_id=record_id,
+                                user_id=match_result.user_id,
+                                similarity=match_result.similarity,
+                                liveness_score=liveness_result.score,
+                            )
 
             results.append({
                 "detection": det,
@@ -343,6 +351,15 @@ class FacePipeline:
             })
 
         return results
+
+    def _should_log_attendance(self, user_id: str) -> bool:
+        """True if enough time passed since this user's last logged attendance."""
+        now = time.time()
+        last = self.last_recognition_time.get(user_id, 0.0)
+        if now - last >= self.config.attendance_throttle_seconds:
+            self.last_recognition_time[user_id] = now
+            return True
+        return False
 
     def _enqueue_sync(
         self,
