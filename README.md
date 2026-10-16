@@ -255,6 +255,11 @@ webcam (or an uploaded image) and needs **no Docker**. In demo mode it runs
 without ONNX models using a synthetic embedding model, so you can exercise the
 UI, enrollment, and attendance flow end-to-end.
 
+The UI is a **VeriFace AI** kiosk-style dashboard (dark emerald theme, recreated
+in plain CSS — no Tailwind/CDN, so it stays offline). Sidebar sections:
+**Kiosk Presensi (Live Scan)**, **Riwayat & Log Kehadiran**, **Data Karyawan**,
+and **Pengaturan Kamera/Sistem**.
+
 - Start: `python -X utf8 main.py --web --demo`, open `http://127.0.0.1:8000`
 - Detection: with no SCRFD model the pipeline loads a vendored **YuNet** model so the
   overlay actually follows your face; `PipelineConfig.detector_backend` selects

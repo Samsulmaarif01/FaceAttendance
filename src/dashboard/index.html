@@ -1,76 +1,373 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="id">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Face Attendance — Local Testing</title>
-  <link rel="stylesheet" href="/static/style.css?v=3" />
+  <title>VeriFace AI — Presensi Pengenalan Wajah</title>
+  <link rel="stylesheet" href="/static/style.css?v=4" />
 </head>
 <body>
-  <header>
-    <h1>Face Attendance</h1>
-    <span id="badge" class="badge">connecting…</span>
-  </header>
+  <!-- Inline icon sprite (offline, no icon font needed) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-scan" viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3"/><path d="M20 8V5a1 1 0 0 0-1-1h-3"/><path d="M4 16v3a1 1 0 0 0 1 1h3"/><path d="M20 16v3a1 1 0 0 1-1 1h-3"/><circle cx="12" cy="12" r="3.2"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 4v4h4"/><path d="M12 8v4l3 2"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3 19a6 6 0 0 1 12 0"/><path d="M16 5.2a3.2 3.2 0 0 1 0 6.1"/><path d="M18 19a6 6 0 0 0-2.5-4.9"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.4M12 18.6V21M3 12h2.4M18.6 12H21M5.6 5.6l1.7 1.7M16.7 16.7l1.7 1.7M18.4 5.6l-1.7 1.7M7.3 16.7l-1.7 1.7"/></symbol>
+    <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z"/><circle cx="12" cy="13" r="3.1"/></symbol>
+    <symbol id="i-switch" viewBox="0 0 24 24"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z"/><path d="M9.5 13.2a2.6 2.6 0 0 1 4.3-1.9"/><path d="M14.5 12.8a2.6 2.6 0 0 1-4.3 1.9"/></symbol>
+    <symbol id="i-lamp" viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.3 1 2.1h5c0-.8.4-1.6 1-2.1A6 6 0 0 0 12 3Z"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4"/><path d="M20 9V5a1 1 0 0 0-1-1h-4"/><path d="M4 15v4a1 1 0 0 0 1 1h4"/><path d="M20 15v4a1 1 0 0 1-1 1h-4"/></symbol>
+    <symbol id="i-face" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="9" cy="10" r=".9" fill="currentColor"/><circle cx="15" cy="10" r=".9" fill="currentColor"/><path d="M8.5 14.4a4 4 0 0 0 7 0"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8.5 12.2 2.3 2.3 4.7-4.9"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12"/><path d="M10 11v6M14 11v6"/></symbol>
+    <symbol id="i-sync" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-13.7-5.3L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 13.7 5.3L20 16"/><path d="M20 20v-4h-4"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M5 16v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.2 2.9 7.7 7 9 4.1-1.3 7-4.8 7-9V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-stream" viewBox="0 0 24 24"><path d="M4 12h3l2-6 3 12 2-8 2 4h4"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4 3 20h18L12 4Z"/><path d="M12 10v4M12 17h.01"/></symbol>
+    <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3v9"/><path d="M6.5 7a7.5 7.5 0 1 0 11 0"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></symbol>
+    <symbol id="i-badge" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2.2"/><path d="M5.5 17a3.6 3.6 0 0 1 7 0"/><path d="M15 10h4M15 14h4"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  </svg>
 
-  <main>
-    <section class="panel video-panel">
-      <div class="stage">
-        <video id="video" autoplay playsinline muted></video>
-        <img id="photo" alt="Uploaded image" hidden />
-        <canvas id="overlay"></canvas>
-        <div id="video-msg" class="video-msg">Camera off</div>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-logo"><svg class="icon"><use href="#i-scan"/></svg></span>
+        <span class="brand-name">VeriFace AI</span>
+        <span class="brand-tag">Enterprise</span>
       </div>
-      <div class="controls">
-        <button id="btn-camera">Start camera</button>
-        <label class="toggle">
-          <input type="checkbox" id="chk-live" checked />
-          Live recognition
-        </label>
-      </div>
-      <div class="controls enroll">
-        <input id="enroll-name" type="text" placeholder="Name (required to enroll)" />
-        <input id="enroll-id" type="text" placeholder="User ID (optional)" />
-        <button id="btn-enroll">Enroll captured face</button>
-        <input id="upload" type="file" accept="image/*" hidden />
-        <button id="btn-upload">Register from image…</button>
-      </div>
-      <p class="hint">
-        Enroll captured face: registers the current webcam frame under the name above
-        (needs the camera on). Register from image…: enrolls a face from a photo only —
-        it never writes attendance.
-      </p>
-      <p id="status" class="status"></p>
-    </section>
-
-    <section class="panel">
-      <h2>Stats</h2>
-      <div class="stats" id="stats"></div>
-      <h2>Users <span class="muted" id="users-count"></span></h2>
-      <div class="table-wrap"><table id="users"><thead>
-        <tr><th>ID</th><th>Name</th><th>Last</th><th></th></tr>
-      </thead><tbody></tbody></table></div>
-    </section>
-
-    <section class="panel wide">
-      <div class="row">
-        <h2>Attendance <span class="muted" id="att-count"></span></h2>
-        <div class="row-actions">
-          <button id="btn-sync" title="Upload unsynced attendance to a central server (offline demo has no server, so this is disabled)">Sync now</button>
-          <button id="btn-clear-att" class="danger">Clear attendance</button>
+      <nav class="topnav" id="topnav">
+        <button class="topnav-link" data-section="presensi">Kiosk Presensi (Live Scan)</button>
+        <button class="topnav-link" data-section="riwayat">Riwayat &amp; Log Kehadiran</button>
+        <button class="topnav-link" data-section="karyawan">Data Karyawan</button>
+        <button class="topnav-link" data-section="pengaturan">Pengaturan Kamera/Sistem</button>
+      </nav>
+      <div class="topbar-right">
+        <div class="pill pill-clock">
+          <svg class="icon sm"><use href="#i-clock"/></svg>
+          <span class="mono strong" id="clock-time">--:--:--</span>
+          <span class="muted tiny" id="clock-zone">WIB (GMT+7)</span>
+        </div>
+        <div class="pill pill-latency">
+          <span class="dot pulse"></span>
+          <span class="muted tiny">Latency:</span>
+          <span class="primary tiny strong" id="latency-value">—</span>
+        </div>
+        <div class="pill pill-user">
+          <div class="user-text">
+            <span id="badge" class="badge">connecting…</span>
+            <span class="muted tiny">Local operator</span>
+          </div>
+          <span class="avatar-ring"><svg class="icon"><use href="#i-user"/></svg></span>
         </div>
       </div>
-      <p class="hint" id="sync-note" hidden>
-        Sync uploads attendance recorded offline to a central server. It is
-        <strong>disabled in the offline demo</strong> (no server transport configured),
-        so records stay local and marked <em>unsynced</em>.
-      </p>
-      <div class="table-wrap"><table id="attendance"><thead>
-        <tr><th>User</th><th>Timestamp</th><th>Similarity</th><th>Synced</th></tr>
-      </thead><tbody></tbody></table></div>
-    </section>
-  </main>
+    </div>
+  </header>
+
+  <aside class="sidebar">
+    <div class="sidebar-top">
+      <div class="sidebar-label">Navigasi Kiosk &amp; Sistem</div>
+      <nav class="sidenav" id="sidenav">
+        <button class="nav-item" data-section="presensi"><svg class="icon"><use href="#i-scan"/></svg><span>Kiosk Presensi (Live Scan)</span></button>
+        <button class="nav-item" data-section="riwayat"><svg class="icon"><use href="#i-history"/></svg><span>Riwayat &amp; Log Kehadiran</span></button>
+        <button class="nav-item" data-section="karyawan"><svg class="icon"><use href="#i-users"/></svg><span>Data Karyawan</span></button>
+        <button class="nav-item" data-section="pengaturan"><svg class="icon"><use href="#i-settings"/></svg><span>Pengaturan Kamera/Sistem</span></button>
+      </nav>
+    </div>
+    <div class="sidebar-bottom">
+      <div class="node-card">
+        <div class="node-head">
+          <span class="muted tiny">AI Inference Node</span>
+          <span class="chip primary" id="node-demo">—</span>
+        </div>
+        <span class="node-title" id="node-matcher">Edge Engine</span>
+        <div class="bar"><span class="bar-fill" id="node-bar" style="width:80%"></span></div>
+        <div class="node-foot">
+          <span>Detector</span>
+          <span class="primary" id="node-detector">—</span>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <div class="shell">
+    <main class="main">
+      <!-- ══════════════════ SECTION: PRESENSI / LIVE SCAN ══════════════════ -->
+      <section class="section" data-view="presensi">
+        <div class="banner">
+          <div class="banner-left">
+            <div class="banner-live">
+              <span class="dot pulse"></span>
+              <span class="overline">Terminal Aktif • Kiosk Presensi Mandiri #01</span>
+            </div>
+            <h1 class="headline">Presensi Pengenalan Wajah AI</h1>
+            <p class="muted">Sistem verifikasi biometrik nirsentuh berkecepatan tinggi dengan proteksi anti-spoofing cerdas.</p>
+          </div>
+          <div class="mode-toggle">
+            <button class="mode-btn active" id="btn-mode-in"><svg class="icon"><use href="#i-check"/></svg><span>Presensi Masuk</span></button>
+            <button class="mode-btn" id="btn-mode-out"><svg class="icon"><use href="#i-history"/></svg><span>Presensi Pulang</span></button>
+          </div>
+        </div>
+
+        <div class="grid-presensi">
+          <div class="col-view">
+            <div class="stage">
+              <video id="video" autoplay playsinline muted></video>
+              <img id="photo" alt="Gambar terunggah" hidden />
+              <canvas id="overlay"></canvas>
+              <div class="stage-scrim top"></div>
+              <div class="stage-scrim side"></div>
+              <div class="laser" id="laser"></div>
+
+              <div class="stage-top">
+                <div class="chip-live">
+                  <span class="dot pulse"></span>
+                  <span class="primary tiny strong">Liveness AI 3.0</span>
+                  <span class="sep">|</span>
+                  <span class="tiny">Anti-Spoofing Valid</span>
+                </div>
+                <div class="stage-actions">
+                  <button class="icon-btn" id="btn-switch" title="Ganti / Muat ulang kamera"><svg class="icon sm"><use href="#i-switch"/></svg></button>
+                  <button class="icon-btn" id="btn-fullscreen" title="Layar penuh"><svg class="icon sm"><use href="#i-expand"/></svg></button>
+                </div>
+              </div>
+
+              <div class="reticle">
+                <div class="reticle-corners">
+                  <span class="c tl"></span><span class="c tr"></span><span class="c bl"></span><span class="c br"></span>
+                </div>
+                <div class="reticle-oval">
+                  <svg class="mesh" viewBox="0 0 100 120" fill="none">
+                    <circle class="pulse" cx="36" cy="42" r="1.5" fill="currentColor"/>
+                    <circle class="pulse" cx="64" cy="42" r="1.5" fill="currentColor"/>
+                    <circle cx="50" cy="55" r="1.2" fill="currentColor"/>
+                    <circle cx="42" cy="72" r="1.2" fill="currentColor"/>
+                    <circle cx="58" cy="72" r="1.2" fill="currentColor"/>
+                    <circle cx="50" cy="85" r="1.8" fill="currentColor"/>
+                    <path d="M36 42 L50 55 L64 42 M36 42 L50 85 L64 42 M50 55 L42 72 L50 85 L58 72 Z" stroke="currentColor" stroke-dasharray="1 1" stroke-width="0.35" opacity="0.65"/>
+                  </svg>
+                  <div class="reticle-core"><svg class="icon"><use href="#i-face"/></svg></div>
+                </div>
+              </div>
+
+              <div id="video-msg" class="video-msg">Kamera nonaktif</div>
+
+              <div class="stage-bottom">
+                <div class="hint-pill">
+                  <svg class="icon primary"><use href="#i-check-circle"/></svg>
+                  <div class="hint-text">
+                    <span id="vf-hint" class="strong">Posisikan Wajah di Tengah Bingkai</span>
+                    <span class="primary tiny" id="vf-sub">Kamera belum aktif</span>
+                  </div>
+                </div>
+                <div class="spec-pill">
+                  <span class="mono tiny muted">1080p</span>
+                  <span class="dot"></span>
+                  <span class="mono tiny primary" id="vf-elapsed">AI —</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="controls-row">
+              <button class="btn primary" id="btn-camera"><svg class="icon"><use href="#i-camera"/></svg><span>Mulai Kamera</span></button>
+              <label class="toggle"><input type="checkbox" id="chk-live" checked /> Pengenalan Langsung</label>
+            </div>
+
+            <div class="tips-bar">
+              <span class="tips-icon"><svg class="icon"><use href="#i-lamp"/></svg></span>
+              <div>
+                <p class="strong">Lepaskan kacamata hitam atau topi</p>
+                <p class="muted tiny">Pastikan pencahayaan merata untuk mempercepat durasi pengenalan biometrik.</p>
+              </div>
+            </div>
+
+            <p id="status" class="status">Siap. Mulai kamera untuk pengenalan langsung.</p>
+          </div>
+
+          <div class="col-match">
+            <div class="match-card">
+              <div class="match-glow"></div>
+              <div class="match-head">
+                <div class="match-head-left">
+                  <span class="chip primary-outline" id="match-state-chip"><span class="dot pulse"></span>Menunggu Wajah</span>
+                  <span class="muted tiny" id="match-when">—</span>
+                </div>
+                <div class="chip primary-outline" id="match-sim-chip">
+                  <svg class="icon sm"><use href="#i-shield"/></svg>
+                  <span id="match-similarity">—</span>
+                </div>
+              </div>
+
+              <div id="match-empty" class="match-empty">
+                <span class="match-empty-icon"><svg class="icon"><use href="#i-face"/></svg></span>
+                <span class="strong">Belum ada verifikasi</span>
+                <span class="muted tiny">Hasil pencocokan wajah terbaru akan muncul di sini secara otomatis.</span>
+              </div>
+
+              <div id="match-body" class="match-body" hidden>
+                <div class="match-profile">
+                  <div class="match-avatar">
+                    <span id="match-avatar-text">?</span>
+                    <span class="match-avatar-badge"><svg class="icon sm"><use href="#i-check"/></svg></span>
+                  </div>
+                  <div class="match-meta">
+                    <h2 id="match-name">—</h2>
+                    <span class="primary" id="match-role">—</span>
+                    <div class="match-tags">
+                      <span class="tag mono" id="match-uid">NIK: —</span>
+                      <span class="tag" id="match-att">—</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="greet">
+                  <div class="greet-head"><svg class="icon secondary"><use href="#i-check-circle"/></svg><span class="strong" id="greet-name">Presensi tercatat</span></div>
+                  <p class="muted tiny" id="greet-msg">Data presensi berhasil disimpan secara lokal.</p>
+                </div>
+
+                <div class="param-grid">
+                  <div class="param"><span class="param-k"><svg class="icon xs"><use href="#i-clock"/></svg>Waktu Presensi</span><span class="param-v mono" id="match-time">—</span><span class="primary tiny" id="match-time-tag">—</span></div>
+                  <div class="param"><span class="param-k"><svg class="icon xs"><use href="#i-shield"/></svg>Skor Kecocokan</span><span class="param-v mono" id="match-score">—</span><span class="primary tiny">Cosine similarity</span></div>
+                  <div class="param"><span class="param-k"><svg class="icon xs"><use href="#i-badge"/></svg>ID Pengguna</span><span class="param-v small mono" id="match-id">—</span><span class="outline tiny" id="match-conf">—</span></div>
+                  <div class="param"><span class="param-k"><svg class="icon xs"><use href="#i-sync"/></svg>Sinkronisasi</span><span class="param-v small primary" id="match-sync">—</span><span class="outline tiny" id="match-sync-id">—</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══════════════════ SECTION: RIWAYAT & LOG ══════════════════ -->
+      <section class="section" data-view="riwayat" hidden>
+        <div class="banner">
+          <div class="banner-left">
+            <h1 class="headline">Riwayat &amp; Log Kehadiran</h1>
+            <p class="muted">Ringkasan statistik dan aliran presensi langsung dari terminal.</p>
+          </div>
+          <div class="row-actions">
+            <button class="btn" id="btn-sync" title="Unggah presensi yang belum tersinkron ke server pusat"><svg class="icon"><use href="#i-sync"/></svg><span>Sync now</span></button>
+            <button class="btn danger" id="btn-clear-att"><svg class="icon"><use href="#i-trash"/></svg><span>Clear attendance</span></button>
+          </div>
+        </div>
+
+        <p class="hint" id="sync-note" hidden>
+          Sync mengunggah presensi yang dicatat offline ke server pusat. Ini
+          <strong>nonaktif pada demo offline</strong> (tanpa transport server), sehingga catatan
+          disimpan lokal dan ditandai <em>unsynced</em>.
+        </p>
+
+        <div class="stat-grid">
+          <div class="stat-card">
+            <div class="stat-head"><span class="stat-k">Total Catatan Presensi</span><span class="stat-ico primary"><svg class="icon sm"><use href="#i-stream"/></svg></span></div>
+            <div class="stat-v"><span class="stat-num" id="stat-records">0</span><span class="stat-sub" id="stat-records-sub">catatan</span></div>
+            <div class="bar"><span class="bar-fill" id="stat-records-bar" style="width:0%"></span></div>
+            <span class="stat-foot primary" id="stat-records-foot">—</span>
+          </div>
+          <div class="stat-card">
+            <div class="stat-head"><span class="stat-k">Karyawan Terdaftar</span><span class="stat-ico"><svg class="icon sm"><use href="#i-users"/></svg></span></div>
+            <div class="stat-v"><span class="stat-num primary" id="stat-users">0</span><span class="stat-sub">pengguna</span></div>
+            <span class="stat-foot outline">Template biometrik aktif</span>
+          </div>
+          <div class="stat-card">
+            <div class="stat-head"><span class="stat-k">Tersinkron</span><span class="stat-ico primary"><svg class="icon sm"><use href="#i-sync"/></svg></span></div>
+            <div class="stat-v"><span class="stat-num primary" id="stat-synced">0</span><span class="stat-sub">unit</span></div>
+            <span class="stat-foot primary">Terunggah ke server pusat</span>
+          </div>
+          <div class="stat-card">
+            <div class="stat-head"><span class="stat-k">Menunggu Sinkron</span><span class="stat-ico alert"><svg class="icon sm"><use href="#i-alert"/></svg></span></div>
+            <div class="stat-v"><span class="stat-num" id="stat-pending">0</span><span class="stat-sub">unit</span></div>
+            <span class="stat-foot outline">Belum terunggah (offline)</span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title"><svg class="icon primary"><use href="#i-stream"/></svg><h3>Log Aktivitas Presensi Langsung</h3></div>
+            <div class="panel-head-right"><span class="dot pulse"></span><span class="muted tiny">Diperbarui otomatis</span></div>
+          </div>
+          <div class="feed" id="feed"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title"><svg class="icon primary"><use href="#i-history"/></svg><h3>Catatan Presensi <span class="muted tiny" id="att-count"></span></h3></div>
+          </div>
+          <div class="table-wrap">
+            <table id="attendance"><thead><tr><th>User</th><th>Nama</th><th>Waktu</th><th>Similarity</th><th>Synced</th></tr></thead><tbody></tbody></table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══════════════════ SECTION: DATA KARYAWAN ══════════════════ -->
+      <section class="section" data-view="karyawan" hidden>
+        <div class="banner">
+          <div class="banner-left">
+            <h1 class="headline">Data Karyawan</h1>
+            <p class="muted">Daftarkan wajah baru (webcam atau unggah gambar) dan kelola template pengguna.</p>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title"><svg class="icon primary"><use href="#i-plus"/></svg><h3>Registrasi Wajah</h3></div></div>
+          <div class="enroll-row">
+            <input id="enroll-name" type="text" placeholder="Nama (wajib untuk mendaftar)" />
+            <input id="enroll-id" type="text" placeholder="User ID (opsional)" />
+            <button class="btn primary" id="btn-enroll"><svg class="icon"><use href="#i-user"/></svg><span>Daftarkan wajah kamera</span></button>
+            <input id="upload" type="file" accept="image/*" hidden />
+            <button class="btn" id="btn-upload"><svg class="icon"><use href="#i-upload"/></svg><span>Daftar dari gambar…</span></button>
+          </div>
+          <p class="hint">
+            <strong>Daftarkan wajah kamera</strong>: merekam frame webcam saat ini dengan nama di atas (kamera harus aktif).
+            <strong>Daftar dari gambar…</strong>: hanya mendaftarkan wajah dari foto — <em>tidak pernah</em> menulis absensi.
+          </p>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <div class="panel-title"><svg class="icon primary"><use href="#i-users"/></svg><h3>Daftar Pengguna <span class="muted tiny" id="users-count"></span></h3></div>
+          </div>
+          <div class="table-wrap">
+            <table id="users"><thead><tr><th>ID</th><th>Nama</th><th>Terakhir Hadir</th><th>Aksi</th></tr></thead><tbody></tbody></table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ══════════════════ SECTION: PENGATURAN ══════════════════ -->
+      <section class="section" data-view="pengaturan" hidden>
+        <div class="banner">
+          <div class="banner-left">
+            <h1 class="headline">Pengaturan Kamera / Sistem</h1>
+            <p class="muted">Status runtime pipeline. Konfigurasi berasal dari <code>PipelineConfig</code> (lihat AGENTS.md).</p>
+          </div>
+        </div>
+
+        <div class="stat-grid">
+          <div class="stat-block"><span class="stat-k">Mode</span><span class="stat-v-sm" id="set-demo">—</span></div>
+          <div class="stat-block"><span class="stat-k">Detector</span><span class="stat-v-sm" id="set-detector">—</span></div>
+          <div class="stat-block"><span class="stat-k">Matcher backend</span><span class="stat-v-sm" id="set-matcher">—</span></div>
+          <div class="stat-block"><span class="stat-k">Recognition models</span><span class="stat-v-sm" id="set-models">—</span></div>
+          <div class="stat-block"><span class="stat-k">Sync</span><span class="stat-v-sm" id="set-sync">—</span></div>
+          <div class="stat-block"><span class="stat-k">Face throttle</span><span class="stat-v-sm">60 s / user</span></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><div class="panel-title"><svg class="icon primary"><use href="#i-settings"/></svg><h3>Catatan</h3></div></div>
+          <p class="hint">
+            Deteksi wajah memakai YuNet (fallback) atau SCRFD bila model tersedia. Pada <strong>demo mode</strong>,
+            pengenalan memakai embedding sintetis dan liveness dilewati. Setelan runtime tidak dibaca dari
+            <code>config/*.yaml</code> — ubah di <code>src/pipeline/pipeline.py</code>.
+          </p>
+        </div>
+      </section>
+    </main>
+  </div>
 
   <canvas id="capture" hidden></canvas>
+
   <div id="toast" class="toast" hidden role="status" aria-live="polite">
     <div class="toast-icon" id="toast-icon">✓</div>
     <div class="toast-body">
@@ -78,6 +375,7 @@
       <div class="toast-sub" id="toast-sub"></div>
     </div>
   </div>
-  <script src="/static/app.js?v=3"></script>
+
+  <script src="/static/app.js?v=4"></script>
 </body>
 </html>
