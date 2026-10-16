@@ -156,6 +156,76 @@ class TestAttendanceDirection:
         assert face["attendance_duplicate_at"] is not None
         assert client.get("/api/stats").json()["total"] == 1
 
+    def test_recheckin_is_allowed_after_checkout(self, client):
+        """masuk -> pulang -> masuk: after checking out the user may check in again."""
+        client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(6))
+        assert client.post("/api/recognize?direction=in", files=_files(6)).json()["faces"][0]["attendance_status"] == "logged"
+        assert client.post("/api/recognize?direction=out", files=_files(6)).json()["faces"][0]["attendance_status"] == "logged"
+
+        face = client.post("/api/recognize?direction=in", files=_files(6)).json()["faces"][0]
+        assert face["attendance_logged"] is True
+        assert face["attendance_status"] == "logged"
+
+        records = client.get("/api/attendance").json()["records"]
+        assert [r["direction"] for r in records] == ["in", "out", "in"]
+        assert client.get("/api/stats").json()["total"] == 3
+
+    def test_second_checkout_is_duplicate(self, client):
+        client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(6))
+        client.post("/api/recognize?direction=in", files=_files(6))
+        client.post("/api/recognize?direction=out", files=_files(6))
+        face = client.post("/api/recognize?direction=out", files=_files(6)).json()["faces"][0]
+        assert face["attendance_logged"] is False
+        assert face["attendance_status"] == "duplicate"
+        assert client.get("/api/stats").json()["total"] == 2
+
+    def test_checkin_while_still_checked_in_is_duplicate(self, client):
+        """A second 'masuk' while the first is still open stays a duplicate."""
+        client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(6))
+        client.post("/api/recognize?direction=in", files=_files(6))
+        face = client.post("/api/recognize?direction=in", files=_files(6)).json()["faces"][0]
+        assert face["attendance_status"] == "duplicate"
+
+
+class TestGateMode:
+    """Gate (IoT) access: a recognised face is always let through."""
+
+    def test_gate_grants_access_on_checkin(self, client):
+        client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(6))
+        face = client.post("/api/recognize?direction=in&gate=true", files=_files(6)).json()["faces"][0]
+        assert face["match"]["matched"] is True
+        assert face["gate_granted"] is True
+
+    def test_gate_records_checkout_without_checkin(self, client):
+        """Leaving must never be blocked by the attendance pairing rule."""
+        client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(6))
+        face = client.post("/api/recognize?direction=out&gate=true", files=_files(6)).json()["faces"][0]
+        assert face["gate_granted"] is True
+        assert face["attendance_logged"] is True
+        assert face["attendance_status"] == "logged"
+        records = client.get("/api/attendance").json()["records"]
+        assert [r["direction"] for r in records] == ["out"]
+
+    def test_attendance_mode_still_blocks_checkout_without_checkin(self, client):
+        client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(6))
+        face = client.post("/api/recognize?direction=out", files=_files(6)).json()["faces"][0]
+        assert face["gate_granted"] is False
+        assert face["attendance_status"] == "not_checked_in"
+        assert client.get("/api/stats").json()["total"] == 0
+
+    def test_gate_grants_access_even_when_attendance_is_duplicate(self, client):
+        client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(6))
+        client.post("/api/recognize?direction=in&gate=true", files=_files(6))
+        face = client.post("/api/recognize?direction=in&gate=true", files=_files(6)).json()["faces"][0]
+        assert face["attendance_status"] == "duplicate"   # not recorded twice
+        assert face["gate_granted"] is True                # but access still granted
+        assert client.get("/api/stats").json()["total"] == 1
+
+    def test_gate_does_not_grant_for_unknown_face(self, client):
+        face = client.post("/api/recognize?direction=in&gate=true", files=_files(9)).json()["faces"][0]
+        assert face["match"] is None
+        assert face["gate_granted"] is False
+
     def test_invalid_direction_is_rejected(self, client):
         assert client.post("/api/recognize?direction=sideways", files=_files(6)).status_code == 400
 
@@ -178,6 +248,37 @@ class TestAttendanceManagement:
         assert res.status_code == 200
         assert res.json()["deleted"] == 1
         assert client.get("/api/stats").json()["total"] == 0
+
+    def test_attendance_can_be_re_logged_immediately_after_clear(self, client):
+        """Clearing the history must not leave the in-memory throttle blocking
+        the next attendance (it used to report "already recorded" instead)."""
+        client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(7))
+        assert client.post("/api/recognize", files=_files(7)).json()["faces"][0]["attendance_logged"] is True
+
+        client.delete("/api/attendance")
+
+        face = client.post("/api/recognize", files=_files(7)).json()["faces"][0]
+        assert face["attendance_logged"] is True
+        assert face["attendance_status"] == "logged"
+        assert client.get("/api/stats").json()["total"] == 1
+        assert client.get("/api/attendance").json()["records"][0]["direction"] == "in"
+
+    def test_checkout_can_be_logged_immediately_after_clear(self, client):
+        """Same regression for the 'out' direction."""
+        client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(7))
+        client.post("/api/recognize?direction=in", files=_files(7))
+        assert client.post("/api/recognize?direction=out", files=_files(7)).json()["faces"][0]["attendance_logged"] is True
+
+        client.delete("/api/attendance")
+
+        face = client.post("/api/recognize?direction=out", files=_files(7)).json()["faces"][0]
+        assert face["attendance_status"] == "not_checked_in"  # no check-in exists any more
+
+        face = client.post("/api/recognize?direction=in", files=_files(7)).json()["faces"][0]
+        assert face["attendance_logged"] is True
+        face = client.post("/api/recognize?direction=out", files=_files(7)).json()["faces"][0]
+        assert face["attendance_logged"] is True
+        assert client.get("/api/stats").json()["total"] == 2
 
     def test_delete_user(self, client):
         client.post("/api/enroll", data={"name": "Bob", "user_id": "b1"}, files=_files(8))

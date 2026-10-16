@@ -59,6 +59,7 @@ def _serialize_face(result: dict) -> dict:
         "attendance_duplicate": bool(result.get("attendance_duplicate", False)),
         "attendance_duplicate_at": result.get("attendance_duplicate_at"),
         "attendance_status": result.get("attendance_status", "no_match"),
+        "gate_granted": bool(result.get("gate_granted", False)),
         "direction": result.get("direction", "in"),
     }
     if match is not None:
@@ -98,12 +99,13 @@ def create_app(
         file: UploadFile = File(...),
         log: bool = True,
         direction: str = "in",
+        gate: bool = False,
     ) -> dict:
         if direction not in ("in", "out"):
             raise HTTPException(status_code=400, detail="direction must be 'in' or 'out'")
         frame = decode_image(await file.read())
         start = time.perf_counter()
-        results = pipe.process_frame(frame, log_attendance=log, direction=direction)
+        results = pipe.process_frame(frame, log_attendance=log, direction=direction, gate=gate)
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         faces = [_serialize_face(r) for r in results]
         return {"faces": faces, "count": len(faces), "elapsed_ms": round(elapsed_ms, 2)}
@@ -148,6 +150,7 @@ def create_app(
     def delete_user(user_id: str) -> dict:
         if not pipe.database.delete_user(user_id):
             raise HTTPException(status_code=404, detail=f"User '{user_id}' not found")
+        pipe.reset_attendance_throttle(user_id)
         return {"success": True, "id": user_id}
 
     @app.get("/api/attendance", response_model=schemas.AttendanceResponse)
@@ -172,6 +175,9 @@ def create_app(
     @app.delete("/api/attendance", response_model=schemas.DeleteResponse)
     def clear_attendance() -> dict:
         removed = pipe.database.clear_attendance()
+        # Drop the in-memory throttle too, so the cleared day can be
+        # re-attended immediately instead of being silently skipped.
+        pipe.reset_attendance_throttle()
         return {"success": True, "deleted": removed}
 
     @app.get("/api/stats", response_model=schemas.StatsResponse)

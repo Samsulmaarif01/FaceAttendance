@@ -44,6 +44,7 @@ class FaceResult(BaseModel):
     attendance_duplicate: bool = False
     attendance_duplicate_at: Optional[str] = None
     attendance_status: str = "no_match"
+    gate_granted: bool = False
     direction: str = "in"
 
 

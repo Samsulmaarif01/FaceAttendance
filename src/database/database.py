@@ -362,6 +362,29 @@ class Database:
             ).fetchone()
         return row is not None
 
+    def get_today_last_direction(
+        self,
+        user_id: str,
+        now: Optional[datetime] = None,
+    ) -> Optional[str]:
+        """
+        Direction of the user's most recent record on the local day, or None.
+
+        Attendance alternates masuk -> pulang -> masuk -> pulang..., so the last
+        record decides what may be logged next: after a *pulang* the user may
+        check in again, while an open *masuk* blocks a second *masuk* and an
+        absent *masuk* blocks *pulang*.
+        """
+        start, end = self._local_day_bounds(now)
+        with self._get_conn() as conn:
+            row = conn.execute(
+                """SELECT direction FROM attendance
+                   WHERE user_id = ? AND timestamp >= ? AND timestamp < ?
+                   ORDER BY timestamp DESC LIMIT 1""",
+                (user_id, start, end),
+            ).fetchone()
+        return (row["direction"] or "in") if row else None
+
     def get_today_record(
         self,
         user_id: str,

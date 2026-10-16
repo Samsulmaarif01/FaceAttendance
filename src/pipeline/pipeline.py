@@ -35,6 +35,7 @@ class PipelineConfig:
     detection_model_path: str = "models/scrfd.onnx"
     detector_backend: str = "auto"  # "auto" | "scrfd" | "cascade" | "dummy"
     detection_input_size: tuple = (640, 640)
+    detection_working_size: tuple = (640, 480)  # YuNet: resize frame to this before detecting
     detection_conf_threshold: float = 0.5
     detection_nms_threshold: float = 0.4
     detection_max_faces: int = 10
@@ -133,7 +134,9 @@ class FacePipeline:
             try:
                 from src.detection.yunet import YuNetFaceDetector
 
-                self.detector = YuNetFaceDetector()
+                self.detector = YuNetFaceDetector(
+                    working_size=self.config.detection_working_size
+                )
                 print("Using YuNet face detector (model-free fallback)")
             except Exception as e:
                 print(f"Warning: Could not load YuNet detector: {e}")
@@ -280,14 +283,20 @@ class FacePipeline:
         frame: np.ndarray,
         log_attendance: bool = True,
         direction: str = "in",
+        gate: bool = False,
     ) -> List[Dict]:
         """
         Process a single frame and return list of results for each detected face.
 
         Set ``log_attendance=False`` to recognize without writing attendance
         (e.g. the web preview / uploaded-image path). ``direction`` is ``"in"``
-        (masuk) or ``"out"`` (pulang); at most one record of each per user per
-        local day is written, so repeat recognitions are ignored.
+        (masuk) or ``"out"`` (pulang).
+
+        Attendance mode alternates masuk -> pulang -> masuk within a local day.
+        ``gate=True`` relaxes that rule for door access: a recognised face is
+        always granted access (``gate_granted``), and a *pulang* is recorded
+        even when no *masuk* exists for the day, because physically leaving the
+        building must never be blocked by the attendance pairing rule.
         """
         direction = "out" if str(direction).lower() in ("out", "pulang") else "in"
         self.frame_count += 1
@@ -324,6 +333,7 @@ class FacePipeline:
             attendance_duplicate = False
             attendance_duplicate_at = None
             attendance_blocked = ""
+            attendance_gate_granted = False
             if liveness_result.is_live:
                 # Get user templates from database (this is a simplification)
                 # In reality, we'd need to store encrypted embeddings or use a different approach
@@ -338,12 +348,20 @@ class FacePipeline:
                         # Update adaptive threshold
                         self.matcher.update_threshold(match_result.user_id, match_result.similarity)
                         uid = match_result.user_id
-                        # Rules (one *masuk* + one *pulang* per user per local day):
-                        #   - a repeat of the same direction is a duplicate
-                        #   - *pulang* requires a *masuk* earlier the same day
-                        if direction == "out" and not self.database.has_attendance_today(uid, "in"):
+                        # Rules: presensi berurutan masuk -> pulang -> masuk -> ...
+                        # dalam satu hari lokal, ditentukan oleh record TERAKHIR:
+                        #   - sudah *masuk* dan belum *pulang* -> "sudah absen"
+                        #   - sudah *pulang* -> boleh absen *masuk* lagi
+                        #   - belum ada *masuk* -> *pulang* ditolak, KECUALI mode
+                        #     gate, karena akses keluar tidak boleh diblokir
+                        #     oleh aturan pairing absensi.
+                        last_direction = self.database.get_today_last_direction(uid)
+                        if gate:
+                            # Wajah dikenali + liveness = akses gate diberikan.
+                            attendance_gate_granted = True
+                        if direction == "out" and last_direction is None and not gate:
                             attendance_blocked = "not_checked_in"
-                        elif self.database.has_attendance_today(uid, direction):
+                        elif last_direction == direction:
                             attendance_duplicate = True
                             attendance_duplicate_at = self.database.get_today_record(uid, direction)
                         elif log_attendance and self._should_log_attendance(uid, direction):
@@ -362,6 +380,11 @@ class FacePipeline:
                                 direction=direction,
                             )
                             attendance_logged = True
+                            # Izinkan transisi berikutnya (mis. masuk -> pulang)
+                            # tanpa menunggu throttle, supaya user bisa absen
+                            # masuk lagi tepat setelah absen pulang.
+                            opposite = "out" if direction == "in" else "in"
+                            self.last_recognition_time.pop(f"{uid}:{opposite}", None)
 
             if attendance_logged:
                 attendance_status = "logged"
@@ -385,6 +408,7 @@ class FacePipeline:
                 "attendance_duplicate": attendance_duplicate,
                 "attendance_duplicate_at": attendance_duplicate_at,
                 "attendance_blocked": attendance_blocked,
+                "gate_granted": attendance_gate_granted,
                 "attendance_status": attendance_status,
                 "direction": direction,
             })
@@ -400,6 +424,22 @@ class FacePipeline:
             self.last_recognition_time[key] = now
             return True
         return False
+
+    def reset_attendance_throttle(self, user_id: Optional[str] = None) -> None:
+        """
+        Forget the in-memory attendance throttle.
+
+        The throttle lives only in this process, so it survives deletions in the
+        database. Without resetting it, clearing the attendance history would
+        leave the next recognition silently skipped, and the live loop would
+        then re-record the person and report "already recorded" afterwards.
+        Call this whenever attendance rows are removed (clear all / delete user).
+        """
+        if user_id is None:
+            self.last_recognition_time.clear()
+            return
+        for key in [k for k in self.last_recognition_time if k.split(":", 1)[0] == user_id]:
+            del self.last_recognition_time[key]
 
     def _enqueue_sync(
         self,
