@@ -4,13 +4,14 @@ Real-time face recognition attendance for CPU-only edge devices (Raspberry Pi 4,
 
 ## Project Status
 
-Phases 1–5 of the roadmap are implemented (see `docs/system_design.md` §13.8):
+Phases 1–6 of the roadmap are implemented (see `docs/system_design.md` §13.8):
 
 - ✅ **Phase 1 – Core Pipeline**: Camera → Detection → Recognition → Liveness → Database
 - ✅ **Phase 2 – Accuracy**: Test-time augmentation, adaptive per-user thresholds, hard-negative mining
 - ✅ **Phase 3 – Security**: `KeyStore` (TPM-ready), hash-chained `AuditLog`, mTLS helpers, biohashing
 - ✅ **Phase 4 – Offline-First**: LWW-Element-Set CRDT, exponential backoff, zstd delta compression, local autonomy
 - ✅ **Phase 5 – Scalability**: vector index (numpy + optional FAISS), hierarchical coarse→fine matching, per-site sharding, management plane
+- ✅ **Phase 6 – UX**: local browser UI (webcam), self-service enrollment, attendance dashboard, demo mode without ONNX
 - ⚠️ **Missing**: ONNX models, real mTLS socket wiring, FAISS installed (index falls back to numpy)
 
 ## Project Overview
@@ -39,13 +40,24 @@ graph TD
 
 ### Current Phase
 
-**Fase 5: Scalability** (implemented)
+**Fase 6: UX** (implemented)
+- **Local web UI** – browser dashboard (`src/dashboard/`) served by the FastAPI app in `src/api/`; webcam capture + overlay, no Docker
+- **Self-service enrollment** – enroll a face from the browser or an uploaded image (`POST /api/enroll`)
+- **Live recognition + attendance** – `POST /api/recognize` draws bounding boxes/labels and logs attendance
+- **Demo mode** – runs without ONNX models using `SyntheticEmbeddingModel` (`PipelineConfig.demo_mode` / `create_demo_config`)
+- **API surface** – `/api/health`, `/api/recognize`, `/api/enroll`, `/api/users`, `/api/attendance`, `/api/stats`, `/api/sync`
+
+<details>
+<summary>Fase 5: Scalability (implemented)</summary>
+
 - **Vector index** – `BruteForceIndex` (exact numpy cosine) + optional `FAISSIndex` (HNSW/flat, lazy import) (`src/index/vector_index.py`)
 - **Hierarchical matching** – `PCAReducer` (numpy SVD) coarse filter → full-vector refinement (`src/index/hierarchical.py`)
 - **Per-site sharding** – `ShardedVectorIndex` routes queries to relevant site shards (`src/index/sharding.py`)
 - **Management plane** – `SiteRegistry` provisions sites, model versions, and aggregates health (`src/index/management.py`)
 - **Indexed matcher** – `IndexedMatcher` is a drop-in `FaceMatcher` using the ANN index
   (`PipelineConfig.matcher_backend = "indexed"`)
+
+</details>
 
 <details>
 <summary>Fase 4: Offline-First (implemented)</summary>
@@ -77,12 +89,12 @@ while True:
 
 ### Test Results
 
-All modules pass unit tests:
-- ✅ Camera capture and config
-- ✅ Face detection with quality gating
-- ✅ Liveness detection logic
-- ✅ Database operations with biohashing
-- ✅ Pipeline integration
+Real pytest suites cover phases 2–6 (`python -X utf8 -m pytest tests/ -v`):
+- ✅ Recognition accuracy (phase 2)
+- ✅ Security: keystore, audit chain, mTLS helpers (phase 3)
+- ✅ Offline-first: CRDT queue, backoff, delta uploads (phase 4)
+- ✅ Scalability: vector index, hierarchical, sharding, registry (phase 5)
+- ✅ Local web API + synthetic demo model (phase 6)
 
 ### Files Structure
 
@@ -126,18 +138,27 @@ src/
 ├── pipeline/         # Main integration
 │   ├── __init__.py
 │   └── pipeline.py
-├── dashboard/        # Web UI (planned)
-└── api/              # REST endpoints (planned)
+├── api/              # Local web API (FastAPI)
+│   ├── __init__.py
+│   ├── __main__.py
+│   ├── app.py
+│   └── schemas.py
+└── dashboard/        # Browser UI (HTML/CSS/JS, no build step)
+    ├── index.html
+    └── static/
+        ├── app.js
+        └── style.css
 
 tests/
 ├── camera/           # Camera tests
 ├── detection/        # Detection tests
-├── recognition/      # Recognition tests
+├── recognition/      # Recognition tests (+ synthetic model, phase 6)
 ├── liveness/         # Liveness tests
 ├── database/         # Database tests
 ├── security/         # Security (phase 3) tests
 ├── sync/             # Offline-first (phase 4) tests
 ├── index/            # Scalability (phase 5) tests
+├── api/              # Local web API (phase 6) tests
 └── pipeline/         # Integration tests
 
 config/
@@ -192,18 +213,36 @@ database:
 ### Running the System
 
 ```bash
+# Local web UI — no Docker, no ONNX models needed (demo mode)
+python -X utf8 main.py --web --demo
+#   then open http://127.0.0.1:8000
+
+# Same, via the module
+python -X utf8 -m src.api            # demo (synthetic embeddings)
+python -X utf8 -m src.api --real     # use real models/…onnx if present
+
 # Test imports
-python test_imports.py
+python -X utf8 test_imports.py
 
-# Run pipeline test suite
-python test_pipeline.py
+# Start the console pipeline (requires actual ONNX models)
+python -X utf8 main.py
 
-# Start the system (requires actual ONNX models)
-python main.py
-
-# Test with dummy models for development
-python main.py --test
+# Console demo mode (synthetic models; no camera UI windows)
+python -X utf8 main.py --demo
 ```
+
+### Local Web Testing (Phase 6)
+
+The browser dashboard runs the full pipeline on frames captured from your
+webcam (or an uploaded image) and needs **no Docker**. In demo mode it runs
+without ONNX models using a synthetic embedding model, so you can exercise the
+UI, enrollment, and attendance flow end-to-end.
+
+- Start: `python -X utf8 main.py --web --demo`, open `http://127.0.0.1:8000`
+- Webcam requires `localhost`/HTTPS (a secure context); `127.0.0.1` is fine.
+- Demo mode tests the **flow/UI**, not real face accuracy — real accuracy needs
+  `.onnx` models in `models/` (gitignored) and `--real`.
+- Tests: `python -X utf8 -m pytest tests/api tests/recognition -v`
 
 ### Development Guidelines
 
@@ -231,13 +270,15 @@ python main.py --test
    - Central management plane (`SiteRegistry`)
    - Tests: `python -X utf8 -m pytest tests/index/ -v`
 
-5. **Phase 6**: UX improvements
-   - Real-time overlays
-   - Self-service enrollment
-   - Web dashboard
+5. **Phase 6**: UX ✅
+   - Real-time overlays (browser canvas)
+   - Self-service enrollment (`POST /api/enroll`)
+   - Web dashboard (`src/dashboard/`, served by `src/api/`)
+   - Demo mode without ONNX models (`SyntheticEmbeddingModel`)
+   - Tests: `python -X utf8 -m pytest tests/api tests/recognition -v`
 
 6. **Phase 7**: Production deployment
-   - Docker containers
+   - Optional Docker containers
    - System monitoring
    - Automated testing
 
@@ -252,21 +293,23 @@ python main.py --test
 
 ### Current Limitations
 
-- No actual ONNX models for inference (pipeline needs models to construct)
-- Simplified liveness detection
+- No actual ONNX models for inference: without them the pipeline runs only in **demo mode**
+  (`SyntheticEmbeddingModel`); real accuracy needs `.onnx` models in `models/`
+- Simplified liveness detection (bypassed in demo mode)
 - Sync is network-agnostic: payloads are signed/compressed but no real mTLS socket is wired yet
-- `process_frame` matching still returns no templates (biohashed templates are non-invertible)
+- Matching uses Fernet-encrypted embeddings stored at rest; the biohashed template is the
+  primary record (biohashes are non-invertible)
 - `faiss`/`hnswlib` not installed: vector index falls back to exact numpy `BruteForceIndex`
   (hierarchical matching preserves recall; ANN speedup arrives once FAISS is installed)
+- Web UI requires a secure context (localhost/HTTPS) for webcam access; image upload is the fallback
 - Basic camera support
 
 ### Next Steps
 
-1. Download ONNX models from official sources
+1. Download ONNX models from official sources and validate real accuracy (`--real`)
 2. Implement proper liveness detection (MiniFASNet)
 3. Add proper matching with FAISS vector search
-4. Implement real-time overlays and web UI
-5. Add comprehensive testing and CI/CD
+4. Package for production (systemd/service scripts; optional Docker) and add CI/CD
 
 ### Getting Started
 
@@ -282,7 +325,7 @@ python main.py --test
    python test_imports.py && python test_pipeline.py
    ```
 
-This completes **Phase 1** of the Face Attendance System implementation. The core pipeline works end-to-end with dummy data and provides a solid foundation for Phases 2-7.
+This completes **Phases 1–6** of the Face Attendance System. The core pipeline runs end-to-end (with dummy data in demo mode), and a local browser UI allows testing without Docker. Phase 7 (production packaging) remains.
 
 ## License
 
