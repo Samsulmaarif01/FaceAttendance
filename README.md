@@ -78,13 +78,21 @@ graph TD
 # Pipeline initialization
 from src.pipeline import create_default_config, FacePipeline
 
-config = create_default_config()
+config = create_default_config()   # production (needs ONNX models)
 pipeline = FacePipeline(config)
 pipeline.start()  # Camera backend
 while True:
     frame = pipeline.camera.capture()
     results = pipeline.process_frame(frame)  # Full pipeline
     pipeline.stop()  # Clean shutdown
+```
+
+```python
+# Demo / no ONNX models (synthetic embeddings, liveness bypassed)
+from src.pipeline import create_demo_config, FacePipeline
+
+pipeline = FacePipeline(create_demo_config())
+results = pipeline.process_frame(frame)
 ```
 
 ### Test Results
@@ -173,6 +181,10 @@ main.py              # Entry point
 
 ### Configuration
 
+> **Note:** `config/*.yaml` is **not loaded yet**. Runtime settings come from the
+> `PipelineConfig` dataclass in `src/pipeline/pipeline.py` (e.g. `create_demo_config()`).
+> The YAML below documents the intended schema; editing it has no effect today.
+
 Edit `config/local.yaml` to customize:
 - Camera device ID, resolution, backend
 - Detection model paths and thresholds
@@ -246,15 +258,17 @@ UI, enrollment, and attendance flow end-to-end.
 
 ### Development Guidelines
 
-1. **Phase 2**: Accuracy enhancements
+1. **Phase 2**: Accuracy ✅
    - Test-time augmentation
    - Adaptive thresholds
    - Hard-negative mining
+   - Tests: `python -X utf8 -m pytest tests/recognition/ -v`
 
-2. **Phase 3**: Security hardening
+2. **Phase 3**: Security ✅
    - Biohashing implementation
    - TPM/secure element key storage
-   - Mutual TLS for sync
+   - Mutual TLS for sync (helpers; socket not wired)
+   - Tests: `python -X utf8 -m pytest tests/security/ -v`
 
 3. **Phase 4**: Offline-first ✅
    - CRDT (`LWWElementSet`)-backed `SyncQueue` for conflict-free sync
@@ -318,11 +332,18 @@ UI, enrollment, and attendance flow end-to-end.
    pip install -r requirements.txt
    ```
 
-2. Download SCRFD and embedding models to `models/`
-3. Configure `config/local.yaml` with your device settings
-4. Run tests:
+2. **(Optional)** Download SCRFD and embedding models to `models/` for real accuracy.
+   Skip this to try the system in demo mode (synthetic embeddings).
+3. Configure your device settings — see the note under **Configuration** (YAML not loaded yet;
+   use `PipelineConfig` / `create_demo_config`).
+4. Try it locally (no models, no Docker):
    ```bash
-   python test_imports.py && python test_pipeline.py
+   python -X utf8 main.py --web --demo     # then open http://127.0.0.1:8000
+   ```
+
+5. Run tests:
+   ```bash
+   python -X utf8 -m pytest tests/ -q
    ```
 
 This completes **Phases 1–6** of the Face Attendance System. The core pipeline runs end-to-end (with dummy data in demo mode), and a local browser UI allows testing without Docker. Phase 7 (production packaging) remains.
