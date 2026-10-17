@@ -482,6 +482,30 @@ class TestUserPhotoBackfill:
         assert client.get("/api/users/s1/photo").content == before
 
 
+class TestDashboardCacheHeaders:
+    """UI tidak boleh disajikan basi.
+
+    index.html yang ter-cache mengunci `?v=` lama pada app.js/style.css, jadi
+    perubahan kode bisa tampak "tidak berefek" padahal server sudah baru.
+    """
+
+    def test_dashboard_html_must_revalidate(self, client):
+        r = client.get("/")
+        assert r.status_code == 200
+        assert "no-cache" in r.headers["cache-control"]
+
+    def test_static_assets_must_revalidate(self, client):
+        r = client.get("/static/app.js")
+        assert r.status_code == 200
+        assert "no-cache" in r.headers["cache-control"]
+
+    def test_avatar_keeps_its_own_caching(self, client):
+        client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(85))
+        r = client.get("/api/users/s1/photo")
+        assert r.status_code == 200
+        assert "max-age=300" in r.headers["cache-control"]
+
+
 class TestAttendanceDirection:
     def test_checkout_without_checkin_is_blocked(self, client):
         client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(6))

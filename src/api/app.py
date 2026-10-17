@@ -275,6 +275,22 @@ def _mount_dashboard(app: FastAPI) -> None:
     if static.is_dir():
         app.mount("/static", StaticFiles(directory=str(static)), name="static")
 
+    @app.middleware("http")
+    async def _revalidate_dashboard(request, call_next):
+        """Never serve the dashboard stale.
+
+        Without a Cache-Control header the browser applies heuristic freshness
+        to index.html, so a restart could keep serving the OLD page — which
+        pins an old ``?v=`` on app.js/style.css and makes a code change look
+        like it did nothing at all. API responses choose their own caching
+        (avatars use max-age=300), so only the UI is touched here.
+        """
+        response = await call_next(request)
+        path = request.url.path
+        if path == "/" or path.startswith("/static"):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
     @app.get("/", include_in_schema=False)
     def dashboard():
         if index.is_file():
