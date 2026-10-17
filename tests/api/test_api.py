@@ -316,6 +316,68 @@ class TestDeleteModes:
         assert client.delete("/api/users/nope?permanent=true").status_code == 404
 
 
+class TestTemplateDecryptHealth:
+    """Kalau kunci enkripsi tidak cocok, template tidak bisa dibaca. Ini dulu
+    ditelan diam-diam sehingga semua scan melaporkan 'belum terdaftar'."""
+
+    def test_health_reports_loaded_templates(self, client):
+        assert client.get("/api/health").json()["templates_loaded"] == 0
+        client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(50))
+        h = client.get("/api/health").json()
+        assert h["templates_loaded"] == 1
+        assert h["templates_unreadable"] == 0
+
+    def test_wrong_key_surfaces_instead_of_silently_ignoring(self, client):
+        from cryptography.fernet import Fernet
+
+        client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(51))
+
+        # ganti kunci di memori server -> template tidak bisa didekripsi
+        pipe = client.app.state.pipeline
+        pipe.database.cipher = Fernet(Fernet.generate_key())
+        pipe.last_recognition_time.clear()
+
+        h = client.get("/api/health").json()
+        assert h["templates_unreadable"] == 1
+        assert h["templates_loaded"] == 0
+        assert h["templates_unreadable_ids"] == ["s1"]
+
+        # dan akibatnya tidak ada yang bisa dikenali
+        face = client.post("/api/recognize?direction=in", files=_files(51)).json()["faces"][0]
+        assert face["match"] is None or face["match"]["matched"] is False
+
+
+class TestUserPhoto:
+    """Foto user disimpan saat pendaftaran dan disajikan lewat endpoint foto."""
+
+    def test_enroll_stores_photo_and_flags_it(self, client):
+        r = client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(60))
+        assert r.json()["has_photo"] is True
+        user = client.get("/api/users").json()["users"][0]
+        assert user["has_photo"] is True
+
+    def test_photo_endpoint_returns_jpeg(self, client):
+        client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(61))
+        res = client.get("/api/users/s1/photo")
+        assert res.status_code == 200
+        assert res.headers["content-type"] == "image/jpeg"
+        assert res.content[:2] == b"\xff\xd8"      # JPEG SOI marker
+
+    def test_photo_endpoint_404_for_unknown_user(self, client):
+        assert client.get("/api/users/nope/photo").status_code == 404
+
+    def test_photo_endpoint_404_when_no_photo_stored(self, client):
+        client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(62))
+        client.database_path = None
+        # hapus fotonya langsung untuk mensimulasikan user lama
+        db = client.app.state.pipeline.database
+        with db._get_conn() as conn:
+            conn.execute("UPDATE users SET photo = NULL WHERE id = ?", ("s1",))
+            conn.commit()
+        assert client.get("/api/users/s1/photo").status_code == 404
+        assert client.get("/api/users").json()["users"][0]["has_photo"] is False
+
+
 class TestAttendanceDirection:
     def test_checkout_without_checkin_is_blocked(self, client):
         client.post("/api/enroll", data={"name": "Alice", "user_id": "a1"}, files=_files(6))

@@ -12,6 +12,12 @@ class HealthResponse(BaseModel):
     detector_loaded: bool
     matcher_backend: str
     sync_enabled: bool
+    # Diagnostic: if templates_unreadable > 0 the encryption key no longer
+    # matches the stored templates and NOTHING can ever be recognised.
+    templates_loaded: int = 0
+    templates_unreadable: int = 0
+    templates_unreadable_ids: List[str] = Field(default_factory=list)
+    enroll_duplicate_threshold: Optional[float] = None
 
 
 class BBox(BaseModel):
@@ -68,6 +74,7 @@ class EnrollResponse(BaseModel):
     similarity: Optional[float] = None
     updated: bool = False        # template refreshed for the same user_id
     reactivated: bool = False    # soft-deleted owner restored, history kept
+    has_photo: bool = False      # avatar thumbnail stored
 
 
 class UserInfo(BaseModel):
@@ -80,6 +87,7 @@ class UserInfo(BaseModel):
     last_attendance: Optional[str] = None
     checked_in_today: bool = False
     checked_out_today: bool = False
+    has_photo: bool = False
 
 
 class UsersResponse(BaseModel):

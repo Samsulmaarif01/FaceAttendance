@@ -518,6 +518,23 @@ class FacePipeline:
 
         det = max(detections, key=lambda d: d.bbox[2] * d.bbox[3])
         embedding = self.ensemble_extractor.extract(frame, det.landmarks)
+        # Avatar thumbnail: crop the face region from the ORIGINAL frame (the
+        # aligner crops from the image it is given), not from an aligned crop.
+        x, y, w, h = det.bbox
+        region = frame[max(0, y):y + h, max(0, x):x + w]
+        if region.size:
+            scale = max(w, h)
+            if scale > 0:
+                pad = int(scale * 0.25)
+                ry1, ry2 = max(0, y - pad), min(frame.shape[0], y + h + pad)
+                rx1, rx2 = max(0, x - pad), min(frame.shape[1], x + w + pad)
+                region = frame[ry1:ry2, rx1:rx2]
+        photo = None
+        if region is not None and region.size:
+            try:
+                photo = cv2.imencode(".jpg", region, [int(cv2.IMWRITE_JPEG_QUALITY), 80])[1].tobytes()
+            except Exception:
+                photo = None
 
         info: Dict = {
             "success": False,
@@ -574,7 +591,8 @@ class FacePipeline:
             info["needs_name"] = True
             return info
         info["user_id"] = uid
-        info["success"] = self.database.add_user(uid, name, embedding)
+        info["success"] = self.database.add_user(uid, name, embedding, photo=photo)
+        info["has_photo"] = photo is not None
         return info
 
     def _find_same_person(self, embedding: np.ndarray) -> Optional[tuple]:

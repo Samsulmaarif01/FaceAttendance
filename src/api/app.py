@@ -21,7 +21,7 @@ from typing import Optional
 import cv2
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from src.pipeline.pipeline import FacePipeline, PipelineConfig, create_demo_config
@@ -85,6 +85,8 @@ def create_app(
 
     @app.get("/api/health", response_model=schemas.HealthResponse)
     def health() -> dict:
+        templates = pipe.database.get_user_templates()
+        unreadable = list(pipe.database.unreadable_templates)
         return {
             "status": "ok",
             "demo_mode": bool(pipe.config.demo_mode),
@@ -92,6 +94,10 @@ def create_app(
             "detector_loaded": pipe.detector is not None,
             "matcher_backend": pipe.config.matcher_backend,
             "sync_enabled": pipe.sync_manager is not None,
+            "templates_loaded": len(templates),
+            "templates_unreadable": len(unreadable),
+            "templates_unreadable_ids": unreadable[:10],
+            "enroll_duplicate_threshold": pipe.config.enroll_duplicate_threshold,
         }
 
     @app.post("/api/recognize", response_model=schemas.RecognizeResponse)
@@ -154,8 +160,18 @@ def create_app(
                 "last_attendance": stats.get("last"),
                 "checked_in_today": bool(status.get("in", False)),
                 "checked_out_today": bool(status.get("out", False)),
+                "has_photo": pipe.database.get_user_photo(u.id) is not None,
             })
         return {"users": result, "count": len(result)}
+
+    @app.get("/api/users/{user_id}/photo", include_in_schema=False)
+    def user_photo(user_id: str):
+        """Avatar JPEG for a user, or 404 when none is stored."""
+        photo = pipe.database.get_user_photo(user_id)
+        if not photo:
+            raise HTTPException(status_code=404, detail="No photo for this user")
+        return Response(content=photo, media_type="image/jpeg",
+                        headers={"Cache-Control": "private, max-age=300"})
 
     @app.delete("/api/users/{user_id}", response_model=schemas.DeleteResponse)
     def delete_user(user_id: str, permanent: bool = False) -> dict:

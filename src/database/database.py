@@ -94,6 +94,7 @@ class Database:
         self.biohasher = BioHasher()
         self.audit_log = audit_log
         self.sync_queue = sync_queue
+        self.unreadable_templates: List[str] = []
         self._init_db()
 
     def _audit(self, event_type: str, user_id: str = "", details: Optional[dict] = None) -> None:
@@ -127,7 +128,8 @@ class Database:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     is_active INTEGER DEFAULT 1,
-                    encrypted_embedding BLOB
+                    encrypted_embedding BLOB,
+                    photo BLOB
                 )
             """)
             conn.execute("""
@@ -155,6 +157,9 @@ class Database:
             columns = [row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()]
             if "encrypted_embedding" not in columns:
                 conn.execute("ALTER TABLE users ADD COLUMN encrypted_embedding BLOB")
+            # Migration: user photo (avatar thumbnail) column.
+            if "photo" not in columns:
+                conn.execute("ALTER TABLE users ADD COLUMN photo BLOB")
             # Migration: older attendance tables lack the direction column.
             att_columns = [row["name"] for row in conn.execute("PRAGMA table_info(attendance)").fetchall()]
             if "direction" not in att_columns:
@@ -170,7 +175,7 @@ class Database:
         finally:
             conn.close()
 
-    def add_user(self, user_id: str, name: str, embedding: np.ndarray) -> bool:
+    def add_user(self, user_id: str, name: str, embedding: np.ndarray, photo: Optional[bytes] = None) -> bool:
         salt = self.biohasher.generate_salt()
         biohashed = self.biohasher.biohash(embedding, self.biohash_token, salt)
         encrypted = self._encrypt_embedding(embedding)
@@ -180,9 +185,9 @@ class Database:
             try:
                 conn.execute(
                     """INSERT INTO users
-                           (id, name, biohashed_template, salt, created_at, updated_at, encrypted_embedding)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (user_id, name, biohashed, salt, now, now, encrypted),
+                           (id, name, biohashed_template, salt, created_at, updated_at, encrypted_embedding, photo)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (user_id, name, biohashed, salt, now, now, encrypted, photo),
                 )
                 conn.commit()
                 self._audit("user_enrolled", user_id, {"name": name})
@@ -197,6 +202,24 @@ class Database:
             except sqlite3.IntegrityError:
                 self._audit("user_enrollment_rejected", user_id, {"name": name, "reason": "duplicate"})
                 return False
+
+    def update_user_photo(self, user_id: str, photo: bytes) -> bool:
+        """Set (or replace) the user's avatar thumbnail."""
+        with self._get_conn() as conn:
+            cur = conn.execute(
+                "UPDATE users SET photo = ?, updated_at = ? WHERE id = ?",
+                (photo, datetime.utcnow().isoformat(), user_id),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def get_user_photo(self, user_id: str) -> Optional[bytes]:
+        """Return the user's avatar JPEG bytes, or None when not stored."""
+        with self._get_conn() as conn:
+            row = conn.execute("SELECT photo FROM users WHERE id = ?", (user_id,)).fetchone()
+        if row is None or row["photo"] is None:
+            return None
+        return bytes(row["photo"])
 
     def get_user(self, user_id: str) -> Optional[User]:
         with self._get_conn() as conn:
@@ -375,11 +398,23 @@ class Database:
             query += " AND is_active = 1"
         with self._get_conn() as conn:
             rows = conn.execute(query).fetchall()
+        # Dekripsi yang gagal DIJAGA, bukan ditelan diam-diam: kalau kunci
+        # Fernet berubah (mis. data/db.key terhapus/terganti) semua template jadi
+        # sampah dan setiap scan akan melaporkan "wajah belum terdaftar" padahal
+        # user-nya ada. surfaced lewat /api/health.
+        unreadable: List[str] = []
         for row in rows:
             try:
                 templates[row["id"]] = self._decrypt_embedding(row["encrypted_embedding"])
             except Exception:
-                continue
+                unreadable.append(row["id"])
+        self.unreadable_templates = unreadable
+        if unreadable:
+            print(
+                f"WARNING: {len(unreadable)} face template(s) could not be decrypted "
+                f"(wrong/missing encryption key?): {', '.join(unreadable[:5])}"
+                f"{' ...' if len(unreadable) > 5 else ''}"
+            )
         return templates
 
     def log_attendance(
