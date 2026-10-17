@@ -285,12 +285,16 @@ async function startCamera() {
       },
       audio: false,
     });
+    stream.getVideoTracks().forEach((t) => {
+      t.addEventListener("ended", () => { stopCamera(); });
+    });
     video.srcObject = stream;
     await video.play();
     photo.hidden = true;
     video.hidden = false;
     $("video-msg").hidden = true;
     $("laser").hidden = false;
+    clearOverlay();
     setTracking(false);
     clearPresence();
     $("btn-camera").querySelector("span").textContent = "Hentikan Kamera";
@@ -307,16 +311,36 @@ async function startCamera() {
   }
 }
 
+function clearOverlay() {
+  const w = overlay.width || frameW || CAMERA_WIDTH;
+  const h = overlay.height || frameH || CAMERA_HEIGHT;
+  overlay.width = w;
+  overlay.height = h;
+  const ctx = overlay.getContext("2d");
+  ctx.clearRect(0, 0, w, h);
+}
+
 function stopCamera() {
+  if (loopTimer) {
+    clearInterval(loopTimer);
+    loopTimer = null;
+  }
   if (stream) {
     stream.getTracks().forEach((t) => t.stop());
     stream = null;
   }
+  try {
+    video.srcObject = null;
+    video.pause();
+  } catch (_) {}
+  video.hidden = true;
   if (photo.hidden) $("video-msg").hidden = false;
+  clearOverlay();
   setTracking(false);
   clearPresence();
   $("btn-camera").querySelector("span").textContent = "Mulai Kamera";
   $("vf-sub").textContent = "Kamera belum aktif";
+  $("vf-elapsed").textContent = "AI —";
 }
 
 function captureBlob() {
@@ -381,7 +405,11 @@ async function recognizeBlob(blob, direction, log) {
   const gate = $("chk-gate") && $("chk-gate").checked;
   const qs = `direction=${direction || "in"}&log=${log ? "true" : "false"}&gate=${gate ? "true" : "false"}`;
   const data = await fetchJSON(`/api/recognize?${qs}`, { method: "POST", body: fd });
-  drawFaces(data.faces);
+  if (stream) {
+    drawFaces(data.faces);
+  } else {
+    clearOverlay();
+  }
   return data;
 }
 
@@ -537,6 +565,11 @@ async function liveLoop() {
     const blob = await captureBlob();
     const recording = mode !== null;
     const data = await recognizeBlob(blob, mode || "in", recording);
+    if (!stream) {
+      clearOverlay();
+      setTracking(false);
+      return;
+    }
     setTracking(data.count > 0);
     $("vf-elapsed").textContent = `AI ${data.elapsed_ms}ms`;
     $("latency-value").textContent = `${data.elapsed_ms}ms (Optimal)`;
@@ -569,7 +602,9 @@ async function liveLoop() {
       alertUnknownFaces(data);
     }
   } catch (e) {
-    setStatus("Galat pengenalan: " + e.message, "err");
+    if (stream) {
+      setStatus("Galat pengenalan: " + e.message, "err");
+    }
   } finally {
     loopBusy = false;
   }
@@ -877,29 +912,140 @@ function enrollFailed(message) {
 }
 
 /* Catatan: registrasi TIDAK pernah menyentuh #photo/#overlay di panggung kios
-   presensi — `liveLoop()` berhenti kalau `!photo.hidden`, jadi menaruh foto di
-   sana akan mematikan pengenalan kiosk. Pratinjau cukup lewat kolom Foto di
-   Daftar Pengguna dan kartu hasil sebelah kios Face ID. */
+   presensi — pendaftaran kamera live sekarang menggunakan dialog kios tersendiri
+   (#dlg-enroll), sehingga user bisa melihat posisi wajahnya di bingkai oval
+   terlebih dahulu sebelum mengambil dan menyimpan foto. */
+let enrollStream = null;
+let enrollCapturedBlob = null;
 
-async function onEnroll() {
+function setEnrollState(state) {
+  const isCaptured = state === "captured";
+  $("enroll-video").hidden = isCaptured;
+  $("enroll-photo-preview").hidden = !isCaptured;
+  $("btn-enroll-snap").hidden = isCaptured;
+  $("btn-enroll-save").hidden = !isCaptured;
+  $("btn-enroll-retake").hidden = !isCaptured;
+  $("enroll-reticle").style.opacity = isCaptured ? "0.35" : "1";
+  $("enroll-stage-hint").textContent = isCaptured
+    ? "Periksa foto: pastikan wajah tampak jelas dan tidak terpotong"
+    : "Posisikan wajah di tengah bingkai sebelum mengambil foto";
+}
+
+async function openEnrollModal() {
+  const name = $("enroll-name").value.trim();
+  if (!name) {
+    showToast("Isi Nama", "Silakan masukkan nama karyawan terlebih dahulu", "err");
+    $("enroll-name").focus();
+    return;
+  }
+  const userId = $("enroll-id").value.trim();
+  $("enroll-target-name").textContent = name;
+  $("enroll-target-id").textContent = userId ? `NIK: ${userId}` : "NIK: Otomatis";
+  $("dlg-enroll").hidden = false;
+  setEnrollState("live");
+
+  const evideo = $("enroll-video");
+  try {
+    if (stream && stream.active) {
+      evideo.srcObject = stream;
+      await evideo.play();
+    } else {
+      enrollStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: CAMERA_WIDTH },
+          height: { ideal: CAMERA_HEIGHT },
+          frameRate: { ideal: 30, max: 30 },
+        },
+        audio: false,
+      });
+      evideo.srcObject = enrollStream;
+      await evideo.play();
+    }
+  } catch (err) {
+    showToast("Kamera tidak tersedia", err.message, "err");
+    closeEnrollModal();
+  }
+}
+
+function closeEnrollModal() {
+  $("dlg-enroll").hidden = true;
+  const evideo = $("enroll-video");
+  try { evideo.pause(); } catch (_) {}
+  evideo.srcObject = null;
+  if (enrollStream) {
+    enrollStream.getTracks().forEach((t) => t.stop());
+    enrollStream = null;
+  }
+  const preview = $("enroll-photo-preview");
+  if (preview.src) {
+    URL.revokeObjectURL(preview.src);
+    preview.src = "";
+  }
+  enrollCapturedBlob = null;
+}
+
+function snapEnrollPhoto() {
+  const evideo = $("enroll-video");
+  const w = evideo.videoWidth || CAMERA_WIDTH;
+  const h = evideo.videoHeight || CAMERA_HEIGHT;
+  const c = $("enroll-capture");
+  c.width = w;
+  c.height = h;
+  c.getContext("2d").drawImage(evideo, 0, 0, w, h);
+  c.toBlob((blob) => {
+    if (!blob) return;
+    enrollCapturedBlob = blob;
+    const url = URL.createObjectURL(blob);
+    $("enroll-photo-preview").src = url;
+    setEnrollState("captured");
+  }, "image/jpeg", 0.90);
+}
+
+function retakeEnrollPhoto() {
+  const preview = $("enroll-photo-preview");
+  if (preview.src) {
+    URL.revokeObjectURL(preview.src);
+    preview.src = "";
+  }
+  enrollCapturedBlob = null;
+  setEnrollState("live");
+}
+
+async function saveEnrollPhoto() {
+  if (!enrollCapturedBlob) return;
   const name = $("enroll-name").value.trim();
   const userId = $("enroll-id").value.trim();
-  hideToast();
-  if (!stream) {
-    return enrollFailed("Kamera belum aktif — nyalakan kamera, atau pakai Daftar dari gambar…");
-  }
+  const saveBtn = $("btn-enroll-save");
+  const origText = saveBtn.querySelector("span").textContent;
+  saveBtn.disabled = true;
+  saveBtn.querySelector("span").textContent = "Menyimpan…";
+
   try {
-    const blob = await captureBlob();
-    const data = await enrollBlob(blob, name, userId);
+    const data = await enrollBlob(enrollCapturedBlob, name, userId);
     describeEnroll(data, "");
+    if (data && data.success !== false && !data.duplicate) {
+      $("enroll-name").value = "";
+      $("enroll-id").value = "";
+      closeEnrollModal();
+      refreshAll();
+    } else {
+      retakeEnrollPhoto();
+    }
   } catch (e) {
     if (String(e.message).indexOf("Isi nama") >= 0) {
       enrollFailed("Wajah ini belum terdaftar — isi nama untuk mendaftarkan pengguna baru.");
-      $("enroll-name").focus();
     } else {
       enrollFailed("Galat pendaftaran: " + e.message);
     }
+    retakeEnrollPhoto();
+  } finally {
+    saveBtn.disabled = false;
+    saveBtn.querySelector("span").textContent = origText;
   }
+}
+
+function onEnroll() {
+  openEnrollModal();
 }
 
 async function onUpload(file) {
@@ -931,16 +1077,52 @@ function wire() {
     startCamera().then((ok) => { if (ok) scheduleLoop(); });
   });
 
-  $("btn-switch").addEventListener("click", () => {
-    const restart = !!stream;
-    stopCamera();
-    startCamera().then((ok) => { if (ok) scheduleLoop(); else if (restart) setStatus("Gagal memuat ulang kamera.", "err"); });
-  });
+  const btnFs = $("btn-fullscreen");
+  if (btnFs) {
+    btnFs.addEventListener("click", () => {
+      const stage = stageEl || document.querySelector(".stage");
+      const fsEl = document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement;
+      if (fsEl) {
+        if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
+        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        else if (document.mozCancelFullScreen) document.mozCancelFullScreen();
+        else if (document.msExitFullscreen) document.msExitFullscreen();
+      } else if (stage) {
+        if (stage.requestFullscreen) {
+          stage.requestFullscreen().catch(() => {});
+        } else if (stage.webkitRequestFullscreen) {
+          stage.webkitRequestFullscreen();
+        } else if (stage.mozRequestFullScreen) {
+          stage.mozRequestFullScreen();
+        } else if (stage.msRequestFullscreen) {
+          stage.msRequestFullscreen();
+        } else if (video && video.webkitEnterFullscreen) {
+          video.webkitEnterFullscreen();
+        }
+      }
+    });
+  }
 
-  $("btn-fullscreen").addEventListener("click", () => {
-    const stage = document.querySelector(".stage");
-    if (document.fullscreenElement) document.exitFullscreen();
-    else if (stage && stage.requestFullscreen) stage.requestFullscreen();
+  const syncFullscreen = () => {
+    const isFs = !!(document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement);
+    if (stageEl) {
+      stageEl.classList.toggle("is-fullscreen", isFs);
+      if (isFs && toastEl && toastEl.parentElement !== stageEl) {
+        stageEl.appendChild(toastEl);
+      } else if (!isFs && toastEl && toastEl.parentElement !== document.body) {
+        document.body.appendChild(toastEl);
+      }
+    }
+    document.body.classList.toggle("is-fullscreen", isFs);
+    if (btnFs) {
+      const use = btnFs.querySelector("use");
+      if (use) use.setAttribute("href", isFs ? "#i-compress" : "#i-expand");
+      btnFs.title = isFs ? "Keluar dari layar penuh" : "Layar penuh";
+    }
+  };
+
+  ["fullscreenchange", "webkitfullscreenchange", "mozfullscreenchange", "MSFullscreenChange"].forEach((evt) => {
+    document.addEventListener(evt, syncFullscreen);
   });
 
   const inBtn = $("btn-mode-in");
@@ -960,9 +1142,19 @@ function wire() {
   window.addEventListener("keydown", (e) => {
     if (e.key === "F1") { e.preventDefault(); inBtn.click(); }
     else if (e.key === "F2") { e.preventDefault(); outBtn.click(); }
+    else if (e.key === "Escape") {
+      if (!$("dlg-enroll").hidden) closeEnrollModal();
+      if (!$("dlg").hidden) closeDeleteDialog(null);
+    }
   });
 
   $("btn-enroll").addEventListener("click", onEnroll);
+  $("btn-enroll-cancel").addEventListener("click", closeEnrollModal);
+  $("btn-enroll-close").addEventListener("click", closeEnrollModal);
+  $("btn-enroll-snap").addEventListener("click", snapEnrollPhoto);
+  $("btn-enroll-retake").addEventListener("click", retakeEnrollPhoto);
+  $("btn-enroll-save").addEventListener("click", saveEnrollPhoto);
+  $("dlg-enroll").addEventListener("click", (e) => { if (e.target === $("dlg-enroll")) closeEnrollModal(); });
   $("btn-upload").addEventListener("click", () => $("upload").click());
   $("upload").addEventListener("change", (e) => {
     if (e.target.files.length) onUpload(e.target.files[0]);

@@ -107,3 +107,45 @@ def test_avatar_photo_is_an_id_selector_not_a_class(sources):
     assert re.search(r"#match-avatar-photo\s*\{[^}]*object-fit:\s*cover", css), (
         "aturan #match-avatar-photo (posisi + object-fit) tidak ditemukan"
     )
+
+
+def test_stop_camera_clears_overlay_and_timer(sources):
+    """Memastikan stopCamera membersihkan kanvas overlay, timer loop, dan status tracking."""
+    _, _, js = sources
+    assert "function clearOverlay()" in js, "fungsi clearOverlay() tidak ditemukan"
+    stop_cam_match = re.search(r"function stopCamera\(\)\s*\{([\s\S]*?)\n\}\n", js)
+    assert stop_cam_match is not None, "fungsi stopCamera() tidak ditemukan"
+    body = stop_cam_match.group(1)
+    assert "clearOverlay()" in body, "stopCamera harus memanggil clearOverlay() agar tracking tidak nyangkut"
+    assert "clearInterval(loopTimer)" in body, "stopCamera harus mematikan loopTimer"
+    assert "setTracking(false)" in body, "stopCamera harus mereset tracking stage"
+
+
+def test_fullscreen_mode_moves_toast_to_bottom_and_removes_switch_camera(sources):
+    """Memastikan tombol kamera switch dihapus, fullscreen button aktif, dan toast diatur di bawah saat fullscreen."""
+    html, css, js = sources
+    assert "btn-switch" not in html, "ikon / tombol ganti kamera seharusnya sudah dihapus dari HTML"
+    assert "btn-switch" not in js, "referensi btn-switch seharusnya sudah dihapus dari JS"
+    assert "btn-fullscreen" in html, "tombol fullscreen harus ada di markup"
+    assert "is-fullscreen" in css, "aturan CSS is-fullscreen harus ada"
+    assert re.search(r"\.stage(?::fullscreen|\.is-fullscreen)[\s\S]*?\.toast\s*\{[^}]*bottom:\s*24px", css), (
+        "toast harus diposisikan di bagian bawah saat fullscreen"
+    )
+
+
+def test_enroll_modal_kiosk_dialog(sources):
+    """Memastikan dialog pendaftaran wajah mandiri (modal kiosk) tersedia dan terhubung lengkap."""
+    html, css, js = sources
+    assert 'id="dlg-enroll"' in html, "modal #dlg-enroll harus ada di index.html"
+    assert 'id="enroll-video"' in html, "video kamera pendaftaran harus ada"
+    assert 'id="btn-enroll-snap"' in html, "tombol ambil foto harus ada"
+    assert 'id="btn-enroll-save"' in html, "tombol simpan foto harus ada"
+    assert 'id="btn-enroll-retake"' in html, "tombol ambil ulang harus ada"
+    assert "openEnrollModal" in js, "fungsi openEnrollModal harus ada di app.js"
+    assert "closeEnrollModal" in js, "fungsi closeEnrollModal harus ada di app.js"
+    assert "snapEnrollPhoto" in js, "fungsi snapEnrollPhoto harus ada di app.js"
+    assert ".dlg-enroll" in css, "aturan CSS .dlg-enroll harus ada"
+    assert ".enroll-stage" in css, "aturan CSS .enroll-stage harus ada"
+
+
+
