@@ -107,11 +107,21 @@ function showToast(title, sub, type, ms) {
 
 const lastStatusByUser = {};
 
+/* Sembunyikan toast sepenuhnya (termasuk teksnya) supaya tidak ada toast lama
+   yang masih terbaca saat aksi berikutnya gagal. */
+function hideToast() {
+  toastEl.hidden = true;
+  $("toast-title").textContent = "";
+  $("toast-sub").textContent = "";
+  if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+}
+
 /* Keadaan "sedang di frame". Digunakan agar pesan (mis. "sudah tercatat")
    hanya diulang ketika orang benar-benar KELUAR lalu masuk lagi — bukan
    setiap frame selama dia tetap berdiri di depan kamera. */
 const presentUsers = new Map(); // user_id -> waktu terakhir terdeteksi
 const PRESENCE_GRACE_MS = 3000;  // toleransi berkedip / frame gagal deteksi
+let cardUserId = null;           // user_id yang sedang tampil di kartu hasil
 
 function updatePresence(matchedIds) {
   const now = Date.now();
@@ -133,6 +143,15 @@ function clearPresence() {
   presentUsers.clear();
   Object.keys(lastStatusByUser).forEach((k) => delete lastStatusByUser[k]);
   lastAttendanceKey = "";
+  resetMatchCard();
+}
+
+/* Kalau orang yang sedang ditampilkan di kartu sudah tidak ada di frame,
+   kosongkan kartunya supaya orang berikutnya tidak melihat nama/NIK/waktu
+   presensi milik orang sebelumnya. Presensi yang sudah TERCATAT di database
+   tidak hilang — hanya tampilan di layar. */
+function pruneMatchCard() {
+  if (cardUserId && !presentUsers.has(cardUserId)) resetMatchCard();
 }
 
 /* Deteksi perubahan status attendance agar tabel/statistik tidak di-refresh
@@ -367,6 +386,27 @@ async function recognizeBlob(blob, direction, log) {
 }
 
 /* ── Instant match card ────────────────────────────────────── */
+const NEUTRAL_CHIP = `<span class="dot pulse"></span>Menunggu Wajah`;
+
+/* Kosongkan kartu hasil. Dipanggil saat orang yang tampil meninggalkan frame,
+   saat kamera dimatikan, dan saat mode absensi diganti. */
+function resetMatchCard() {
+  cardUserId = null;
+  $("match-body").hidden = true;
+  $("match-empty").hidden = false;
+  $("match-state-chip").className = "chip primary-outline";
+  $("match-state-chip").innerHTML = NEUTRAL_CHIP;
+  $("match-when").textContent = "—";
+  $("match-similarity").textContent = "—";
+  // Kosongkan juga field identitasnya, bukan cuma menyembunyikan: `hidden`
+  // sudah cukup untuk tampilan, tapi inireisik tidak menyisakan data orang
+  // sebelumnya di DOM kios.
+  $("match-avatar-text").textContent = "?";
+  $("match-name").textContent = "—";
+  $("match-uid").textContent = "NIK: —";
+  $("greet-name").textContent = "Presensi tercatat";
+}
+
 function updateMatchCard(face, recording) {
   const m = face.match;
   const name = m.name || m.user_id;
@@ -378,6 +418,7 @@ function updateMatchCard(face, recording) {
 
   $("match-empty").hidden = true;
   $("match-body").hidden = false;
+  cardUserId = m.user_id;
 
   $("match-avatar-text").textContent = initials(name);
   $("match-name").textContent = name;
@@ -439,6 +480,32 @@ function updateMatchCard(face, recording) {
   $("match-sync-id").textContent = status === "logged" ? "status: unsynced" : "tidak ada catatan baru";
 }
 
+/* Wajah terdeteksi tapi tidak dikenali sebagai pengguna terdaftar -> beri
+   tahu orangnya (merah), cukup satu kali per "kedatangan" supaya tidak
+   spam di loop 700 ms. Alert hilang otomatis oleh showToast. */
+let unknownWarned = false;
+function alertUnknownFaces(data) {
+  if (data.count > 0) {
+    setStatus(
+      data.count === 1
+        ? "Wajah terdeteksi, tetapi belum terdaftar — mendaftarkan di menu Data Karyawan."
+        : `${data.count} wajah terdeteksi, belum ada yang terdaftar — mendaftarkan di menu Data Karyawan.`,
+      "err",
+    );
+    if (!unknownWarned) {
+      unknownWarned = true;
+      showToast(
+        "Wajah tidak terdaftar",
+        "Wajah ini belum terdaftar — daftarkan di menu Data Karyawan",
+        "err",
+      );
+    }
+  } else {
+    unknownWarned = false;
+    setStatus(`Tidak ada wajah terdeteksi (${data.elapsed_ms} ms)`, "info");
+  }
+}
+
 async function liveLoop() {
   if (loopBusy) return;                    // jangan tumpang tindih dengan loop sebelumnya
   if (!$("chk-live").checked || !stream || !photo.hidden) return;
@@ -452,15 +519,15 @@ async function liveLoop() {
     $("latency-value").textContent = `${data.elapsed_ms}ms (Optimal)`;
     const matched = data.faces.filter((f) => f.match && f.match.matched);
     updatePresence(new Set(matched.map((f) => f.match.user_id)));
+    pruneMatchCard();
     if (!recording) {
       // No mode chosen yet: recognise only, never write attendance.
       if (matched.length) {
         setStatus(`Terdeteksi: ${matched.map((f) => f.match.name).join(", ")} — pilih mode Masuk/Pulang untuk mencatat absensi.`, "info");
         updateMatchCard(matched[0], false);
-      } else if (data.count > 0) {
-        setStatus(`${data.count} wajah terdeteksi (${data.elapsed_ms} ms)`, "info");
+        alertUnknownFaces(data);
       } else {
-        setStatus(`Tidak ada wajah terdeteksi (${data.elapsed_ms} ms)`, "info");
+        alertUnknownFaces(data);
       }
       return;
     }
@@ -471,13 +538,12 @@ async function liveLoop() {
       updateMatchCard(matched[0], true);
       // Refresh tabel hanya saat status attendance benar-benar BERUBAH.
       // Sebelumnya 3 request + render ulang penuh tiap tick (700 ms): saat wajah
-      // terdeteksi itu membuat antrean menumpuk danappeared "lambat" justru
+      // terdeteksi itu membuat antrean menumpuk dan muncul "lambat" justru
       // setelah record pertama tercatat (tabel baru punya isi untuk dirender).
       if (attendanceChanged(matched)) refreshAll();
-    } else if (data.count > 0) {
-      setStatus(`${data.count} wajah terdeteksi, belum ada yang cocok (${data.elapsed_ms} ms)`, "info");
+      unknownWarned = false;
     } else {
-      setStatus(`Tidak ada wajah terdeteksi (${data.elapsed_ms} ms)`, "info");
+      alertUnknownFaces(data);
     }
   } catch (e) {
     setStatus("Galat pengenalan: " + e.message, "err");
@@ -508,51 +574,103 @@ async function refreshStats() {
 }
 
 /* ── Users ─────────────────────────────────────────────────── */
+let showArchived = false;
+
 async function refreshUsers() {
   try {
-    const data = await fetchJSON("/api/users");
+    const data = await fetchJSON(`/api/users?include_archived=${showArchived ? "true" : "false"}`);
     userMap = {};
     data.users.forEach((u) => { userMap[u.id] = { name: u.name, count: u.attendance_count }; });
     $("users-count").textContent = `(${data.count})`;
+    $("btn-archived").checked = showArchived;
     const tbody = $("users").querySelector("tbody");
     if (!data.users.length) {
-      tbody.innerHTML = `<tr><td class="table-empty" colspan="5">Belum ada pengguna terdaftar.</td></tr>`;
+      tbody.innerHTML = `<tr><td class="table-empty" colspan="5">${
+        showArchived ? "Belum ada pengguna terdaftar." : "Belum ada pengguna aktif — centang “Tampilkan arsip” untuk melihat pengguna yang dinonaktifkan."
+      }</td></tr>`;
       return;
     }
     tbody.innerHTML = data.users
       .map((u) => {
         const last = u.last_attendance ? fmtTime(u.last_attendance) : "—";
-        const today = (u.checked_in_today || u.checked_out_today)
-          ? (u.checked_in_today ? dirBadge("in") : "") + (u.checked_out_today ? dirBadge("out") : "")
-          : `<span class="muted tiny">belum</span>`;
-        return `<tr>` +
+        const archived = u.is_archived === true;
+        const today = archived
+          ? `<span class="chip warn"><span class="dot"></span>Nonaktif</span>`
+          : (u.checked_in_today || u.checked_out_today)
+            ? (u.checked_in_today ? dirBadge("in") : "") + (u.checked_out_today ? dirBadge("out") : "")
+            : `<span class="muted tiny">belum</span>`;
+        const action = archived
+          ? `<button class="btn icon-only" data-restore="${esc(u.id)}" title="Pulihkan pengguna"><svg class="icon sm"><use href="#i-check"/></svg></button>`
+          : `<button class="btn danger icon-only" data-delete="${esc(u.id)}" title="Hapus pengguna"><svg class="icon sm"><use href="#i-trash"/></svg></button>`;
+        return `<tr${archived ? ' class="row-archived"' : ""}>` +
           `<td class="mono nowrap">${esc(u.id)}</td>` +
           `<td><div class="user-name-cell"><span class="avatar-cell">${esc(initials(u.name))}</span>` +
           `<span class="user-name-text">${esc(u.name)}</span></div></td>` +
           `<td class="today-cell"><div class="chip-row">${today}</div></td>` +
           `<td class="mono nowrap">${last}</td>` +
-          `<td class="action-cell"><button class="btn danger icon-only" data-delete="${esc(u.id)}" title="Hapus pengguna">` +
-          `<svg class="icon sm"><use href="#i-trash"/></svg></button></td>` +
+          `<td class="action-cell">${action}</td>` +
           `</tr>`;
       })
       .join("");
   } catch (_) {}
 }
 
+/* Dialog dua pilihan: arsip (soft delete) vs hapus permanen. */
+let dlgResolve = null;
+function openDeleteDialog(userId, name, count) {
+  $("dlg-text").textContent = `Hapus "${name || userId}" (${userId})?`;
+  $("dlg-hint").textContent =
+    `Nonaktifkan: wajah & riwayat tetap disimpan (${count || 0} catatan presensi), pengguna bisa dipulihkan. ` +
+    `Hapus permanen: user, template wajah, dan seluruh ${count || 0} catatan presensinya dihapus — tidak bisa dibatalkan.`;
+  $("dlg").hidden = false;
+  dlgResolve = { userId, name };
+  return new Promise((resolve) => { dlgResolve.resolve = resolve; });
+}
+function closeDeleteDialog(value) {
+  const r = dlgResolve;
+  $("dlg").hidden = true;
+  dlgResolve = null;
+  if (r && r.resolve) r.resolve(value);
+}
+
 async function deleteUser(userId) {
-  if (!confirm(`Hapus pengguna "${userId}"? Template-nya akan dinonaktifkan.`)) return;
+  const known = userMap[userId] || {};
+  const choice = await openDeleteDialog(userId, known.name, known.count);
+  if (!choice) return;
+  const permanent = choice === "permanent";
   try {
-    await fetchJSON(`/api/users/${encodeURIComponent(userId)}`, { method: "DELETE" });
-    setStatus(`Pengguna ${userId} dihapus.`, "ok");
-    showToast("Pengguna dihapus", userId, "info");
-    refreshUsers();
-    refreshStats();
+    const r = await fetchJSON(
+      `/api/users/${encodeURIComponent(userId)}${permanent ? "?permanent=true" : ""}`,
+      { method: "DELETE" },
+    );
+    if (permanent) {
+      setStatus(`Pengguna ${userId} dihapus permanen (${r.attendance_deleted || 0} catatan presensi ikut terhapus).`, "ok");
+      showToast("Dihapus permanen", `${userId} — ${r.attendance_deleted || 0} catatan ikut terhapus`, "info");
+    } else {
+      setStatus(`Pengguna ${userId} dinonaktifkan (arsip). Riwayat presensinya tetap disimpan.`, "ok");
+      showToast("Pengguna diarsipkan", `${userId} — riwayat tetap ada, bisa dipulihkan`, "");
+    }
+    clearPresence();
+    refreshAll();
   } catch (e) {
     setStatus("Galat hapus: " + e.message, "err");
+    showToast("Gagal menghapus", e.message, "err");
   }
 }
 
-/* ── Attendance ────────────────────────────────────────────── */
+async function restoreUser(userId) {
+  try {
+    await fetchJSON(`/api/users/${encodeURIComponent(userId)}/restore`, { method: "POST" });
+    setStatus(`Pengguna ${userId} dipulihkan.`, "ok");
+    showToast("Pengguna dipulihkan", userId, "");
+    refreshAll();
+  } catch (e) {
+    setStatus("Galat pulihkan: " + e.message, "err");
+    showToast("Gagal memulihkan", e.message, "err");
+  }
+}
+
+    /* ── Attendance ────────────────────────────────────────────── */
 function statusBadge(synced) {
   return synced
     ? `<span class="chip primary"><span class="dot"></span>Tersinkron</span>`
@@ -565,6 +683,12 @@ function dirBadge(dir) {
     : `<span class="chip primary"><span class="dot"></span>Masuk</span>`;
 }
 
+/* Nama dikirim server (LEFT JOIN users) supaya riwayat milik user yang sudah
+   dihapus tetap menampilkan namanya, bukan "—". */
+function recordName(r) {
+  return r.name || (userMap[r.user_id] || {}).name || r.user_id;
+}
+
 async function refreshAttendance() {
   try {
     const data = await fetchJSON("/api/attendance?limit=50");
@@ -573,7 +697,7 @@ async function refreshAttendance() {
     const tbody = $("attendance").querySelector("tbody");
     tbody.innerHTML = data.records.length
       ? data.records
-          .map((r) => `<tr><td class="mono">${esc(r.user_id)}</td><td>${esc((userMap[r.user_id] || {}).name || "—")}</td><td>${dirBadge(r.direction)}</td><td>${fmtTime(r.timestamp)}</td><td>${r.similarity.toFixed(3)}</td><td>${r.synced ? "yes" : "no"}</td></tr>`)
+          .map((r) => `<tr><td class="mono">${esc(r.user_id)}</td><td>${esc(recordName(r))}</td><td>${dirBadge(r.direction)}</td><td>${fmtTime(r.timestamp)}</td><td>${r.similarity.toFixed(3)}</td><td>${r.synced ? "yes" : "no"}</td></tr>`)
           .join("")
       : `<tr><td class="table-empty" colspan="6">Belum ada catatan presensi.</td></tr>`;
 
@@ -581,7 +705,7 @@ async function refreshAttendance() {
     feed.innerHTML = data.records.length
       ? data.records.slice(0, 6)
           .map((r) => {
-            const name = (userMap[r.user_id] || {}).name || r.user_id;
+            const name = recordName(r);
             return `<div class="feed-row">` +
               `<div class="feed-left">` +
               `<span class="feed-avatar">${esc(initials(name))}</span>` +
@@ -628,7 +752,10 @@ async function onSync() {
   }
 }
 
-/* ── Enroll / register ─────────────────────────────────────── */
+/* ── Enroll / register ──────────────────────────────────────
+   Pendaftaran wajah HANYA untuk mendaftarkan wajah — tidak pernah menulis
+   absensi. Backend menolak wajah yang sudah terdaftar, jadi operator tidak
+   perlu mendaftarkan ulang orang yang sama. */
 async function enrollBlob(blob, name, userId) {
   const fd = new FormData();
   fd.append("name", name);
@@ -638,6 +765,82 @@ async function enrollBlob(blob, name, userId) {
   refreshUsers();
   refreshStats();
   return data;
+}
+
+/* Kembalikan null kalau backend menolak (wajah sudah terdaftar / konflik). */
+function describeEnroll(data, source) {
+  if (data.reactivated) {
+    setStatus(`"${data.name}" (${data.user_id}) diaktifkan kembali — riwayat presensinya tetap tersambung.`, "ok");
+    showToast("Pengguna diaktifkan kembali", `${data.name} (${data.user_id}) — riwayat lama dipertahankan`, "");
+    return null;
+  }
+  if (data.updated) {
+    setStatus(`Template wajah "${data.name}" (${data.user_id}) diperbarui. Tidak ada absensi yang dicatat.`, "ok");
+    showToast("Wajah diperbarui", `${data.name} (${data.user_id}) — daftar ulang`, "");
+    return null;
+  }
+  if (data.duplicate) {
+    const pct = data.similarity != null ? ` (${(data.similarity * 100).toFixed(0)}% mirip)` : "";
+    const deleted = data.existing_is_active === false ? " — pengguna ini sudah dihapus sebelumnya" : "";
+    setStatus(`Wajah sudah terdaftar atas nama "${data.existing_name}" (${data.existing_user_id})${pct}${deleted}. Tidak ada pengguna baru dibuat.`, "info");
+    showToast("Wajah sudah terdaftar", `${data.existing_name} (${data.existing_user_id})${pct} — tidak didaftarkan ulang`, "info");
+    return null;
+  }
+  if (data.success === false) {
+    return enrollFailed("Pendaftaran ditolak oleh server.");
+  }
+  setStatus(`Terdaftar "${data.name}" (${data.user_id})${source}. Tidak ada absensi yang dicatat.`, "ok");
+  showToast("Pendaftaran berhasil", `${data.name} — hanya daftar wajah, tanpa absensi`, "");
+  return data;
+}
+
+/* Setiap kegagalan pendaftaran SELALU tampil sebagai toast merah, supaya tidak
+   pernah tertukar dengan toast sukses dari aksi sebelumnya. */
+function enrollFailed(message) {
+  setStatus(message, "err");
+  showToast("Wajah tidak tersimpan", message, "err");
+  return null;
+}
+
+async function onEnroll() {
+  const name = $("enroll-name").value.trim();
+  const userId = $("enroll-id").value.trim();
+  hideToast();
+  if (!stream) {
+    return enrollFailed("Kamera belum aktif — nyalakan kamera, atau pakai Daftar dari gambar…");
+  }
+  try {
+    const blob = await captureBlob();
+    const data = await enrollBlob(blob, name, userId);
+    describeEnroll(data, "");
+  } catch (e) {
+    if (String(e.message).indexOf("Isi nama") >= 0) {
+      enrollFailed("Wajah ini belum terdaftar — isi nama untuk mendaftarkan pengguna baru.");
+      $("enroll-name").focus();
+    } else {
+      enrollFailed("Galat pendaftaran: " + e.message);
+    }
+  }
+}
+
+async function onUpload(file) {
+  const name = $("enroll-name").value.trim();
+  const userId = $("enroll-id").value.trim();
+  hideToast();
+  try {
+    await showPhoto(file);
+    const data = await enrollBlob(file, name, userId);
+    if (describeEnroll(data, " dari gambar")) {
+      drawRegisteredLabel(data.name);
+    }
+  } catch (e) {
+    if (String(e.message).indexOf("Isi nama") >= 0) {
+      enrollFailed("Wajah ini belum terdaftar — isi nama untuk mendaftarkan pengguna baru.");
+      $("enroll-name").focus();
+    } else {
+      enrollFailed("Galat pendaftaran: " + e.message);
+    }
+  }
 }
 
 async function showPhoto(file) {
@@ -651,48 +854,6 @@ async function showPhoto(file) {
   await photo.decode();
   setFrameSize(photo.naturalWidth, photo.naturalHeight);
   overlay.getContext("2d").clearRect(0, 0, frameW, frameH);
-}
-
-async function onEnroll() {
-  const name = $("enroll-name").value.trim();
-  const userId = $("enroll-id").value.trim();
-  if (!name) {
-    setStatus("Isi nama dulu, lalu klik Daftarkan wajah kamera.", "err");
-    $("enroll-name").focus();
-    return;
-  }
-  if (!stream) {
-    setStatus("Aktifkan kamera dulu, atau gunakan Daftar dari gambar… untuk mendaftar dari foto.", "err");
-    return;
-  }
-  try {
-    const blob = await captureBlob();
-    const data = await enrollBlob(blob, name, userId);
-    setStatus(`Terdaftar "${data.name}" (${data.user_id}).`, "ok");
-    showToast("Wajah terdaftar", `${data.name} (${data.user_id})`, "");
-  } catch (e) {
-    setStatus("Galat pendaftaran: " + e.message, "err");
-  }
-}
-
-async function onUpload(file) {
-  const name = $("enroll-name").value.trim();
-  const userId = $("enroll-id").value.trim();
-  if (!name) {
-    setStatus("Isi nama, lalu pilih gambar untuk mendaftarkan wajah tersebut.", "err");
-    $("enroll-name").focus();
-    return;
-  }
-  try {
-    await showPhoto(file);
-    const data = await enrollBlob(file, name, userId);
-    drawRegisteredLabel(data.name);
-    setStatus(`Terdaftar "${data.name}" (${data.user_id}) dari gambar. Tidak ada absensi yang dicatat.`, "ok");
-    showToast("Pendaftaran berhasil", `${data.name} — tanpa absensi`, "info");
-    refreshAttendance();
-  } catch (e) {
-    setStatus("Galat pendaftaran: " + e.message, "err");
-  }
 }
 
 /* ── Wiring ────────────────────────────────────────────────── */
@@ -747,8 +908,18 @@ function wire() {
   $("btn-sync").addEventListener("click", onSync);
   $("btn-clear-att").addEventListener("click", clearAttendance);
   $("users").querySelector("tbody").addEventListener("click", (e) => {
-    const btn = e.target.closest("[data-delete]");
-    if (btn) deleteUser(btn.getAttribute("data-delete"));
+    const del = e.target.closest("[data-delete]");
+    if (del) { deleteUser(del.getAttribute("data-delete")); return; }
+    const res = e.target.closest("[data-restore]");
+    if (res) restoreUser(res.getAttribute("data-restore"));
+  });
+  $("dlg-cancel").addEventListener("click", () => closeDeleteDialog(null));
+  $("dlg-archive").addEventListener("click", () => closeDeleteDialog("archive"));
+  $("dlg-permanent").addEventListener("click", () => closeDeleteDialog("permanent"));
+  $("dlg").addEventListener("click", (e) => { if (e.target === $("dlg")) closeDeleteDialog(null); });
+  $("btn-archived").addEventListener("change", (e) => {
+    showArchived = e.target.checked;
+    refreshUsers();
   });
 
   video.addEventListener("loadedmetadata", () => {

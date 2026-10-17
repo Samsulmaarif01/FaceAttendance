@@ -220,7 +220,8 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; backgrou
 .match-glow { position: absolute; right: -60px; top: -60px; width: 220px; height: 220px; border-radius: 50%; background: var(--primary-soft); filter: blur(60px); pointer-events: none; }
 .match-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .match-head-left { display: flex; align-items: center; gap: 10px; }
-.match-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 40px 10px; flex: 1; }
+.match-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 40px 10px; flex: 1; animation: match-fade 0.2s ease-out; }
+@keyframes match-fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .match-empty-icon { width: 64px; height: 64px; border-radius: 50%; background: var(--surface-high); color: var(--outline); display: flex; align-items: center; justify-content: center; }
 .match-empty-icon .icon { width: 32px; height: 32px; }
 .match-body { display: flex; flex-direction: column; gap: 16px; }
@@ -280,6 +281,7 @@ th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--bor
 th { color: var(--on-surface-variant); font-weight: 500; position: sticky; top: 0; background: var(--surface-container); font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
 tbody tr:hover { background: var(--surface-low); }
 .table-empty { color: var(--outline); text-align: center; }
+.row-archived td { opacity: 0.62; }
 
 /* Table cells must stay `display: table-cell`; any flex layout goes on a
    wrapper INSIDE the cell. Setting `display: flex` on a <td> drops it from the
@@ -301,6 +303,15 @@ tbody tr:hover { background: var(--surface-low); }
 .enroll-row input[type="text"] { width: 100%; min-width: 0; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-low); color: var(--on-surface); font: inherit; }
 .enroll-row input[type="text"]:focus { outline: none; border-color: var(--primary); }
 .enroll-row .btn { justify-content: center; white-space: nowrap; }
+
+/* ── Dialog hapus pengguna ────────────────────────────────── */
+.dlg-backdrop { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(2, 6, 18, 0.62); backdrop-filter: blur(3px); animation: toast-in 0.15s ease-out; }
+.dlg-backdrop[hidden] { display: none; }
+.dlg { width: 100%; max-width: 440px; background: var(--surface-container); border: 1px solid var(--border); border-radius: 18px; padding: 22px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55); }
+.dlg h3 { font-size: 17px; }
+.dlg-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.dlg-actions .btn { flex: 1 1 auto; justify-content: center; white-space: nowrap; }
+.dlg-hint { line-height: 1.45; }
 
 /* ── Toast ───────────────────────────────────────────────── */
 .toast { position: fixed; top: 80px; right: 20px; z-index: 80; display: flex; align-items: center; gap: 12px; min-width: 250px; max-width: 360px; padding: 14px 18px; border-radius: 14px; background: #14532d; border: 1px solid var(--primary); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); animation: toast-in 0.25s ease-out; }

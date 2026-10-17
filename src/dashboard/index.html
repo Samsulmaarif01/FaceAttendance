@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>VeriFace AI — Presensi Pengenalan Wajah</title>
   <script>try { if (localStorage.getItem("vf-theme") === "light") document.documentElement.classList.add("light"); } catch (e) {}</script>
-  <link rel="stylesheet" href="/static/style.css?v=18" />
+  <link rel="stylesheet" href="/static/style.css?v=23" />
 </head>
 <body>
   <!-- Inline icon sprite (offline, no icon font needed) -->
@@ -333,6 +333,9 @@
         <div class="panel">
           <div class="panel-head">
             <div class="panel-title"><svg class="icon primary"><use href="#i-users"/></svg><h3>Daftar Pengguna <span class="muted tiny" id="users-count"></span></h3></div>
+            <label class="toggle" title="Tampilkan pengguna yang dinonaktifkan (arsip) beserta tombol pulihkan">
+              <input type="checkbox" id="btn-archived" /> Tampilkan arsip
+            </label>
           </div>
           <div class="table-wrap">
             <table id="users"><thead><tr><th>ID</th><th>Nama</th><th>Hari Ini</th><th>Terakhir Hadir</th><th>Aksi</th></tr></thead><tbody></tbody></table>
@@ -393,6 +396,24 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=18"></script>
+  <!-- Dialog hapus pengguna: arsip (soft delete) vs hapus permanen -->
+  <div id="dlg" class="dlg-backdrop" hidden>
+    <div class="dlg" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+      <h3 id="dlg-title">Hapus pengguna</h3>
+      <p id="dlg-text" class="muted">Pilih cara menghapus pengguna ini.</p>
+      <div class="dlg-actions">
+        <button class="btn" id="dlg-cancel">Batal</button>
+        <button class="btn" id="dlg-archive">
+          <svg class="icon"><use href="#i-clock"/></svg><span>Nonaktifkan (arsip)</span>
+        </button>
+        <button class="btn danger" id="dlg-permanent">
+          <svg class="icon"><use href="#i-trash"/></svg><span>Hapus permanen</span>
+        </button>
+      </div>
+      <p class="dlg-hint tiny muted" id="dlg-hint"></p>
+    </div>
+  </div>
+
+  <script src="/static/app.js?v=23"></script>
 </body>
 </html>
