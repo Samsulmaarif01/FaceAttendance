@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>VeriFace AI — Presensi Pengenalan Wajah</title>
   <script>try { if (localStorage.getItem("vf-theme") === "light") document.documentElement.classList.add("light"); } catch (e) {}</script>
-  <link rel="stylesheet" href="/static/style.css?v=26" />
+  <link rel="stylesheet" href="/static/style.css?v=30" />
 </head>
 <body>
   <!-- Inline icon sprite (offline, no icon font needed) -->
@@ -342,6 +342,12 @@
           <div class="table-wrap">
             <table id="users"><thead><tr><th>Foto</th><th>Nama</th><th>ID</th><th>Hari Ini</th><th>Terakhir Hadir</th><th>Aksi</th></tr></thead><tbody></tbody></table>
           </div>
+          <input type="file" id="photo-upload" accept="image/*" hidden />
+          <p class="hint">
+            Tombol <svg class="icon sm"><use href="#i-camera"/></svg> pada kolom Aksi menyimpan foto wajah untuk pengguna
+            yang <strong>sudah ada</strong> — tanpa daftar ulang. Foto lama punya cache, jadi tekan
+            <strong>Ctrl+Shift+R</strong> bila tampak tidak berubah.
+          </p>
         </div>
       </section>
 
@@ -417,6 +423,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=26"></script>
+  <script src="/static/app.js?v=30"></script>
 </body>
 </html>

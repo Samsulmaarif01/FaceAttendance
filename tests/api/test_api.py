@@ -368,7 +368,6 @@ class TestUserPhoto:
 
     def test_photo_endpoint_404_when_no_photo_stored(self, client):
         client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(62))
-        client.database_path = None
         # hapus fotonya langsung untuk mensimulasikan user lama
         db = client.app.state.pipeline.database
         with db._get_conn() as conn:
@@ -376,6 +375,111 @@ class TestUserPhoto:
             conn.commit()
         assert client.get("/api/users/s1/photo").status_code == 404
         assert client.get("/api/users").json()["users"][0]["has_photo"] is False
+
+
+class TestUserPhotoBackfill:
+    """Foto bisa diisi/diganti untuk pengguna yang SUDAH ada, tanpa daftar ulang."""
+
+    def _drop_photo(self, client, user_id="s1"):
+        db = client.app.state.pipeline.database
+        with db._get_conn() as conn:
+            conn.execute("UPDATE users SET photo = NULL WHERE id = ?", (user_id,))
+            conn.commit()
+
+    def test_set_photo_for_existing_user(self, client):
+        client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(70))
+        self._drop_photo(client)
+        assert client.get("/api/users").json()["users"][0]["has_photo"] is False
+
+        r = client.post("/api/users/s1/photo", files=_files(71))
+        assert r.status_code == 200
+        body = r.json()
+        assert body["success"] is True
+        assert body["has_photo"] is True
+        assert body["bytes"] > 0
+        assert client.get("/api/users").json()["users"][0]["has_photo"] is True
+        assert client.get("/api/users/s1/photo").status_code == 200
+
+    def test_set_photo_leaves_template_and_attendance_untouched(self, client):
+        client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(72))
+        client.post("/api/recognize?direction=in", files=_files(72))
+        db = client.app.state.pipeline.database
+        template_before = db.get_user_templates()["s1"].copy()
+        attendance_before = len(client.get("/api/attendance").json()["records"])
+
+        assert client.post("/api/users/s1/photo", files=_files(73)).status_code == 200
+
+        assert np.allclose(template_before, db.get_user_templates()["s1"])
+        assert len(client.get("/api/attendance").json()["records"]) == attendance_before
+
+    def test_set_photo_404_for_unknown_user(self, client):
+        assert client.post("/api/users/nope/photo", files=_files(74)).status_code == 404
+
+    def test_set_photo_400_when_no_face_detected(self, client):
+        client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(75))
+        # detektor dummy selalu menemukan wajah, jadi paksa kondisi "tanpa wajah"
+        pipe = client.app.state.pipeline
+        pipe.face_thumbnail = lambda frame, detection=None: None
+
+        assert client.post("/api/users/s1/photo", files=_files(76)).status_code == 400
+        # foto lama tidak boleh ikut terhapus oleh kegagalan ini
+        assert client.get("/api/users/s1/photo").status_code == 200
+
+    def test_daftar_ulang_refreshes_the_photo(self, client):
+        """Daftar ulang dulu hanya memperbarui template, foto tidak tersimpan."""
+        client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(77))
+        self._drop_photo(client)
+
+        r = client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(77))
+        assert r.json()["updated"] is True
+        assert r.json()["has_photo"] is True
+        assert client.get("/api/users").json()["users"][0]["has_photo"] is True
+
+    def test_reenroll_archived_same_id_reactivates_not_just_updates(self, client):
+        """User terarsip + id yang SAMA harus diaktifkan kembali.
+
+        Kalau tidak, jawabannya "berhasil diperbarui" tapi barisnya tetap
+        nonaktif, sehingga wajahnya tidak akan pernah dikenali.
+        """
+        client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(78))
+        client.delete("/api/users/s1")
+        self._drop_photo(client)
+
+        body = client.post(
+            "/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(78)
+        ).json()
+        assert body["reactivated"] is True
+        assert body["has_photo"] is True
+
+        active = client.get("/api/users").json()["users"][0]
+        assert active["is_active"] is True
+        assert active["has_photo"] is True
+
+    def test_recognition_never_fills_in_a_missing_photo(self, client):
+        """Absensi bukan pendaftaran: frame absensi tidak boleh jadi foto profil.
+
+        Foto profil harus berasal dari foto yang DIDAFTARKAN. Sebelumnya
+        pipeline mengisi avatar dari frame pengenalan pertama, jadi yang tampil
+        di kartu kiosk/Data Karyawan adalah capture saat absen, bukan foto
+        pendaftaran. Sekarang pengenalan benar-benar tidak menyentuh `photo`.
+        """
+        client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(79))
+        self._drop_photo(client)
+        assert client.get("/api/users").json()["users"][0]["has_photo"] is False
+
+        face = client.post("/api/recognize?direction=in", files=_files(79)).json()["faces"][0]
+        assert face["match"]["matched"] is True
+
+        assert client.get("/api/users").json()["users"][0]["has_photo"] is False
+        assert client.get("/api/users/s1/photo").status_code == 404
+
+    def test_recognition_never_overwrites_an_existing_photo(self, client):
+        client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(80))
+        before = client.get("/api/users/s1/photo").content
+
+        client.post("/api/recognize?direction=in", files=_files(81))
+
+        assert client.get("/api/users/s1/photo").content == before
 
 
 class TestAttendanceDirection:

@@ -173,6 +173,22 @@ def create_app(
         return Response(content=photo, media_type="image/jpeg",
                         headers={"Cache-Control": "private, max-age=300"})
 
+    @app.post("/api/users/{user_id}/photo", response_model=schemas.PhotoResponse)
+    async def set_user_photo(user_id: str, file: UploadFile = File(...)) -> dict:
+        """Attach or replace the avatar of an EXISTING user.
+
+        Photo-only: the stored template and every attendance record are left
+        untouched, so an operator can backfill an avatar for someone enrolled
+        before thumbnails existed without re-registering their face.
+        """
+        if pipe.database.get_user(user_id) is None:
+            raise HTTPException(status_code=404, detail=f"User '{user_id}' not found")
+        frame = decode_image(await file.read())
+        photo = pipe.update_photo_from_frame(frame, user_id)
+        if photo is None:
+            raise HTTPException(status_code=400, detail="No usable face detected")
+        return {"success": True, "user_id": user_id, "has_photo": True, "bytes": len(photo)}
+
     @app.delete("/api/users/{user_id}", response_model=schemas.DeleteResponse)
     def delete_user(user_id: str, permanent: bool = False) -> dict:
         """Archive (soft delete, default) or permanently delete a user.

@@ -255,19 +255,39 @@ class Database:
                 for r in rows
             ]
 
-    def update_user_embedding(self, user_id: str, embedding: np.ndarray) -> bool:
+    def update_user_embedding(
+        self,
+        user_id: str,
+        embedding: np.ndarray,
+        photo: Optional[bytes] = None,
+    ) -> bool:
+        """
+        Refresh a user's template in place ("Daftar ulang").
+
+        ``photo`` is the new avatar thumbnail. When it is None the stored photo
+        is deliberately left untouched, so refreshing a template never wipes an
+        avatar that was captured earlier.
+        """
         salt = self.biohasher.generate_salt()
         biohashed = self.biohasher.biohash(embedding, self.biohash_token, salt)
         encrypted = self._encrypt_embedding(embedding)
         now = datetime.utcnow().isoformat()
 
         with self._get_conn() as conn:
-            cur = conn.execute(
-                """UPDATE users SET biohashed_template = ?, salt = ?, updated_at = ?,
-                       encrypted_embedding = ?
-                   WHERE id = ?""",
-                (biohashed, salt, now, encrypted, user_id),
-            )
+            if photo is not None:
+                cur = conn.execute(
+                    """UPDATE users SET biohashed_template = ?, salt = ?, updated_at = ?,
+                           encrypted_embedding = ?, photo = ?
+                       WHERE id = ?""",
+                    (biohashed, salt, now, encrypted, photo, user_id),
+                )
+            else:
+                cur = conn.execute(
+                    """UPDATE users SET biohashed_template = ?, salt = ?, updated_at = ?,
+                           encrypted_embedding = ?
+                       WHERE id = ?""",
+                    (biohashed, salt, now, encrypted, user_id),
+                )
             conn.commit()
             if cur.rowcount > 0:
                 self._audit("template_updated", user_id)
@@ -298,6 +318,7 @@ class Database:
         user_id: str,
         embedding: Optional[np.ndarray] = None,
         name: Optional[str] = None,
+        photo: Optional[bytes] = None,
     ) -> bool:
         """
         Re-enable a soft-deleted user, keeping their attendance history.
@@ -315,7 +336,9 @@ class Database:
         if not reactivated:
             return False
         if embedding is not None:
-            self.update_user_embedding(user_id, embedding)
+            self.update_user_embedding(user_id, embedding, photo=photo)
+        elif photo is not None:
+            self.update_user_photo(user_id, photo)
         self._audit("user_reactivated", user_id, {"name": name} if name else {})
         self._enqueue_sync({
             "id": secrets.token_urlsafe(16),

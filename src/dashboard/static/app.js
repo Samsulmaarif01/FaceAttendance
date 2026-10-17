@@ -402,6 +402,11 @@ function resetMatchCard() {
   // sudah cukup untuk tampilan, tapi inireisik tidak menyisakan data orang
   // sebelumnya di DOM kios.
   $("match-avatar-text").textContent = "?";
+  $("match-avatar-text").hidden = false;
+  const avReset = $("match-avatar-photo");
+  avReset.hidden = true;
+  avReset.removeAttribute("data-uid");
+  avReset.removeAttribute("src");
   $("match-name").textContent = "—";
   $("match-uid").textContent = "NIK: —";
   $("greet-name").textContent = "Presensi tercatat";
@@ -422,15 +427,20 @@ function updateMatchCard(face, recording) {
 
   $("match-avatar-text").textContent = initials(name);
   // Tampilkan foto user di sebelah kios Face ID; fallback ke inisial.
+  // Inisial disembunyikan saat foto tampil supaya tidak ada dua identitas
+  // (dan supaya kios tidak pernah menampilkan huruf di atas wajah).
   const av = $("match-avatar-photo");
+  const avText = $("match-avatar-text");
   if (info.has_photo) {
     av.hidden = false;
+    avText.hidden = true;
     if (av.getAttribute("data-uid") !== m.user_id) {
       av.setAttribute("data-uid", m.user_id);
       av.src = photoUrl(m.user_id);
     }
   } else {
     av.hidden = true;
+    avText.hidden = false;
     av.removeAttribute("data-uid");
     av.removeAttribute("src");
   }
@@ -589,14 +599,21 @@ async function refreshStats() {
 /* ── Users ─────────────────────────────────────────────────── */
 let showArchived = false;
 
-const photoUrl = (id) => `/api/users/${encodeURIComponent(id)}/photo`;
+/* Bump the stamp after replacing an avatar so the browser drops its cached JPEG
+   (the endpoint serves Cache-Control: max-age=300 with a stable URL). */
+const photoStamp = {};
+const photoUrl = (id) =>
+  `/api/users/${encodeURIComponent(id)}/photo${photoStamp[id] ? `?t=${photoStamp[id]}` : ""}`;
 
-/* Avatar di tabel: foto bila ada, jika tidak jatuh ke inisial. */
+/* Avatar di tabel: foto bila ada, jika tidak jatuh ke inisial.
+   Sengaja TANPA loading="lazy": tabel pengguna berada di dalam <section hidden>,
+   dan gambar lazy di kontainer display:none tidak dimuat sampai terlihat —
+   akibatnya sel foto tampil sebagai lingkaran abu-abu kosong. Kegagalan muat
+   ditangani lewat listener `error` fase capture (lihat wire()). */
 function photoCell(u) {
   if (u.has_photo) {
-    return `<img class="photo-thumb" src="${photoUrl(u.id)}" alt="" loading="lazy" ` +
-      `onerror="this.replaceWith(Object.assign(document.createElement('span'),` +
-      `{className:'photo-empty',textContent:${JSON.stringify(initials(u.name))}}))" />`;
+    return `<img class="photo-thumb" src="${photoUrl(u.id)}" alt="" ` +
+      `data-initials="${esc(initials(u.name))}" />`;
   }
   return `<span class="photo-empty">${esc(initials(u.name))}</span>`;
 }
@@ -626,9 +643,10 @@ async function refreshUsers() {
           : (u.checked_in_today || u.checked_out_today)
             ? (u.checked_in_today ? dirBadge("in") : "") + (u.checked_out_today ? dirBadge("out") : "")
             : `<span class="muted tiny">belum</span>`;
-        const action = archived
+        const photoBtn = `<button class="btn icon-only" data-photo="${esc(u.id)}" title="Isi / ganti foto pengguna"><svg class="icon sm"><use href="#i-camera"/></svg></button>`;
+        const action = photoBtn + (archived
           ? `<button class="btn icon-only" data-restore="${esc(u.id)}" title="Pulihkan pengguna"><svg class="icon sm"><use href="#i-check"/></svg></button>`
-          : `<button class="btn danger icon-only" data-delete="${esc(u.id)}" title="Hapus pengguna"><svg class="icon sm"><use href="#i-trash"/></svg></button>`;
+          : `<button class="btn danger icon-only" data-delete="${esc(u.id)}" title="Hapus pengguna"><svg class="icon sm"><use href="#i-trash"/></svg></button>`);
         return `<tr${archived ? ' class="row-archived"' : ""}>` +
           `<td class="photo-cell">${photoCell(u)}</td>` +
           `<td><div class="user-name-cell"><span class="user-name-text">${esc(u.name)}</span></div></td>` +
@@ -697,7 +715,36 @@ async function restoreUser(userId) {
   }
 }
 
-    /* ── Attendance ────────────────────────────────────────────── */
+/* Foto user bisa diisi/diganti TANPA daftar ulang. Endpoint-nya foto-saja:
+   template wajah dan seluruh catatan absensi tidak tersentuh, jadi aman
+   dipakai untuk melengkapi foto user yang didaftarkan sebelum fitur ini ada. */
+let photoTarget = null;
+
+async function setUserPhoto(userId, file) {
+  const fd = new FormData();
+  fd.append("file", file);
+  try {
+    const r = await fetchJSON(`/api/users/${encodeURIComponent(userId)}/photo`, {
+      method: "POST",
+      body: fd,
+    });
+    // URL foto stabil, jadi tandai versi baru agar browser tidak memakai JPEG lama.
+    photoStamp[userId] = Date.now();
+    const av = $("match-avatar-photo");
+    if (av && av.getAttribute("data-uid") === userId) av.removeAttribute("data-uid");
+    setStatus(
+      `Foto pengguna ${userId} disimpan (${r.bytes} byte). Template wajah dan absensi tidak tersentuh.`,
+      "ok",
+    );
+    showToast("Foto diperbarui", `${userId} — ${r.bytes} byte`, "");
+  } catch (e) {
+    setStatus("Galat simpan foto: " + e.message, "err");
+    showToast("Foto tidak tersimpan", e.message, "err");
+  }
+  refreshUsers();
+}
+
+/* ── Attendance ────────────────────────────────────────────── */
 function statusBadge(synced) {
   return synced
     ? `<span class="chip primary"><span class="dot"></span>Tersinkron</span>`
@@ -924,10 +971,36 @@ function wire() {
   $("btn-sync").addEventListener("click", onSync);
   $("btn-clear-att").addEventListener("click", clearAttendance);
   $("users").querySelector("tbody").addEventListener("click", (e) => {
+    const ph = e.target.closest("[data-photo]");
+    if (ph) {
+      photoTarget = ph.getAttribute("data-photo");
+      $("photo-upload").click();
+      return;
+    }
     const del = e.target.closest("[data-delete]");
     if (del) { deleteUser(del.getAttribute("data-delete")); return; }
     const res = e.target.closest("[data-restore]");
     if (res) restoreUser(res.getAttribute("data-restore"));
+  });
+  /* `error` pada <img> tidak bubble, jadi didengarkan di fase capture: foto
+     yang gagal dimuat diganti inisial supaya sel tidak jadi lingkaran kosong. */
+  $("users").querySelector("tbody").addEventListener("error", (e) => {
+    const img = e.target;
+    if (!img || !img.classList || !img.classList.contains("photo-thumb")) return;
+    const span = document.createElement("span");
+    span.className = "photo-empty";
+    span.textContent = img.getAttribute("data-initials") || "?";
+    img.replaceWith(span);
+  }, true);
+  /* Foto di kartu kiosk: kalau gagal dimuat, kembali ke inisial. */
+  $("match-avatar-photo").addEventListener("error", () => {
+    $("match-avatar-photo").hidden = true;
+    $("match-avatar-text").hidden = false;
+  });
+  $("photo-upload").addEventListener("change", (e) => {
+    if (e.target.files.length && photoTarget) setUserPhoto(photoTarget, e.target.files[0]);
+    e.target.value = "";
+    photoTarget = null;
   });
   $("dlg-cancel").addEventListener("click", () => closeDeleteDialog(null));
   $("dlg-archive").addEventListener("click", () => closeDeleteDialog("archive"));

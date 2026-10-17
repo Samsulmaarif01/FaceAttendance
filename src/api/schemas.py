@@ -104,6 +104,15 @@ class DeleteResponse(BaseModel):
     attendance_deleted: int = 0
 
 
+class PhotoResponse(BaseModel):
+    """Result of attaching a fresh avatar to an existing user (photo-only)."""
+
+    success: bool
+    user_id: str
+    has_photo: bool = True
+    bytes: int = 0
+
+
 class AttendanceInfo(BaseModel):
     id: str
     user_id: str

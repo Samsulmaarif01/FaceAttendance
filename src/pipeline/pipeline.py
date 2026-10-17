@@ -357,6 +357,11 @@ class FacePipeline:
                         # Update adaptive threshold
                         self.matcher.update_threshold(match_result.user_id, match_result.similarity)
                         uid = match_result.user_id
+                        # Foto profil TIDAK PERNAH ditulis dari jalur absensi.
+                        # Frame yang dipakai untuk absen bukan foto pendaftaran:
+                        # avatar hanya berasal dari pendaftaran (capture langsung
+                        # atau berkas foto yang diunggah) dan dari aksi manual
+                        # operator di Data Karyawan.
                         # Rules: presensi berurutan masuk -> pulang -> masuk -> ...
                         # dalam satu hari lokal, ditentukan oleh record TERAKHIR:
                         #   - sudah *masuk* dan belum *pulang* -> "sudah absen"
@@ -487,6 +492,66 @@ class FacePipeline:
                 return []
         return self._dummy_detection(frame)
 
+    def face_thumbnail(
+        self,
+        frame: np.ndarray,
+        detection: Optional[FaceDetection] = None,
+    ) -> Optional[bytes]:
+        """
+        Crop the largest face from ``frame`` and return a JPEG q80 thumbnail.
+
+        The crop is padded 25 % around the detected box so the avatar keeps the
+        forehead/chin. Returns None when there is no usable face. Used for the
+        avatar shown in the Daftar Pengguna table and the kiosk match card.
+        """
+        if detection is None:
+            detections = self.quality_gate.check_batch(frame, self._detect(frame))
+            if not detections:
+                return None
+            detection = max(detections, key=lambda d: d.bbox[2] * d.bbox[3])
+
+        x, y, w, h = detection.bbox
+        pad = int(max(w, h) * 0.25)
+        y1, y2 = max(0, y - pad), min(frame.shape[0], y + h + pad)
+        x1, x2 = max(0, x - pad), min(frame.shape[1], x + w + pad)
+        region = frame[y1:y2, x1:x2]
+        if region.size == 0:
+            return None
+        try:
+            return cv2.imencode(
+                ".jpg", region, [int(cv2.IMWRITE_JPEG_QUALITY), 80]
+            )[1].tobytes()
+        except Exception:
+            return None
+
+    def update_photo_from_frame(self, frame: np.ndarray, user_id: str) -> Optional[bytes]:
+        """
+        Store a fresh avatar for an EXISTING user from a single frame.
+
+        Photo-only: it never rewrites the face template and never writes
+        attendance, so it is safe to use for users enrolled before the avatar
+        existed. Returns the stored JPEG bytes, or None when the user does not
+        exist or no usable face was found.
+        """
+        if self.database.get_user(user_id) is None:
+            return None
+        photo = self.face_thumbnail(frame)
+        if photo is None:
+            return None
+        if not self.database.update_user_photo(user_id, photo):
+            return None
+        return photo
+
+    # CATATAN PENTING: tidak ada penulisan foto dari jalur absensi.
+    # Foto profil HANYA berasal dari:
+    #   1. pendaftaran (enroll_from_frame) — capture langsung atau berkas foto
+    #      yang diunggah operator saat mendaftar; dan
+    #   2. aksi manual operator (update_photo_from_frame) lewat tombol
+    #      "Isi / ganti foto", yang juga memakai BERKAS GAMBAR, bukan frame
+    #      kamera absensi.
+    # Jangan pernah menambahkan auto-capture dari frame pengenalan/absensi:
+    # frame absensi bukan foto yang didaftarkan.
+
     def enroll_from_frame(
         self,
         frame: np.ndarray,
@@ -518,23 +583,7 @@ class FacePipeline:
 
         det = max(detections, key=lambda d: d.bbox[2] * d.bbox[3])
         embedding = self.ensemble_extractor.extract(frame, det.landmarks)
-        # Avatar thumbnail: crop the face region from the ORIGINAL frame (the
-        # aligner crops from the image it is given), not from an aligned crop.
-        x, y, w, h = det.bbox
-        region = frame[max(0, y):y + h, max(0, x):x + w]
-        if region.size:
-            scale = max(w, h)
-            if scale > 0:
-                pad = int(scale * 0.25)
-                ry1, ry2 = max(0, y - pad), min(frame.shape[0], y + h + pad)
-                rx1, rx2 = max(0, x - pad), min(frame.shape[1], x + w + pad)
-                region = frame[ry1:ry2, rx1:rx2]
-        photo = None
-        if region is not None and region.size:
-            try:
-                photo = cv2.imencode(".jpg", region, [int(cv2.IMWRITE_JPEG_QUALITY), 80])[1].tobytes()
-            except Exception:
-                photo = None
+        photo = self.face_thumbnail(frame, det)
 
         info: Dict = {
             "success": False,
@@ -554,16 +603,13 @@ class FacePipeline:
                 "existing_is_active": owner.is_active,
                 "similarity": similarity,
             })
-            # Re-registering the same person id: refresh the template in place.
-            if user_id and owner.id == user_id:
-                self.database.update_user_embedding(user_id, embedding)
-                info["success"] = True
-                info["updated"] = True
-                return info
             # Owner was deleted earlier: bring them (and their history) back.
-            # This must happen even when the caller filled in a *different*
-            # user_id — otherwise we would answer "already registered" while
-            # nobody is actually active, and the face could never be used.
+            # This MUST win over the "same user_id" refresh below — otherwise
+            # re-enrolling a soft-deleted person while typing their old id would
+            # report success while leaving the row archived, so the face could
+            # never be recognised. It also has to happen when the caller filled
+            # in a *different* user_id, or we would answer "already registered"
+            # while nobody is actually active.
             if not owner.is_active:
                 taken = user_id if (user_id and user_id != owner.id) else None
                 if taken is not None and self.database.get_user(taken) is not None:
@@ -571,11 +617,21 @@ class FacePipeline:
                     info["success"] = False
                     info["conflict"] = True
                     return info
-                self.database.reactivate_user(owner.id, embedding=embedding, name=name or owner.name)
+                self.database.reactivate_user(
+                    owner.id, embedding=embedding, name=name or owner.name, photo=photo
+                )
                 info["success"] = True
                 info["reactivated"] = True
+                info["has_photo"] = photo is not None
                 info["user_id"] = owner.id
                 info["name"] = owner.name
+                return info
+            # Owner is active and this is their own id: refresh the template.
+            if user_id and owner.id == user_id:
+                self.database.update_user_embedding(user_id, embedding, photo=photo)
+                info["success"] = True
+                info["updated"] = True
+                info["has_photo"] = photo is not None
                 return info
             # Owner is active: only a plain duplicate unless the caller pointed
             # an already-taken id at this face.
