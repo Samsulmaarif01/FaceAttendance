@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>VeriFace AI — Presensi Pengenalan Wajah</title>
   <script>try { if (localStorage.getItem("vf-theme") === "light") document.documentElement.classList.add("light"); } catch (e) {}</script>
-  <link rel="stylesheet" href="/static/style.css?v=23" />
+  <link rel="stylesheet" href="/static/style.css?v=26" />
 </head>
 <body>
   <!-- Inline icon sprite (offline, no icon font needed) -->
@@ -215,6 +215,7 @@
               <div id="match-body" class="match-body" hidden>
                 <div class="match-profile">
                   <div class="match-avatar">
+                    <img id="match-avatar-photo" alt="" hidden />
                     <span id="match-avatar-text">?</span>
                     <span class="match-avatar-badge"><svg class="icon sm"><use href="#i-check"/></svg></span>
                   </div>
@@ -327,6 +328,7 @@
           <p class="hint">
             <strong>Daftarkan wajah kamera</strong>: merekam frame webcam saat ini dengan nama di atas (kamera harus aktif).
             <strong>Daftar dari gambar…</strong>: hanya mendaftarkan wajah dari foto — <em>tidak pernah</em> menulis absensi.
+            Foto wajah tersimpan di kolom <strong>Foto</strong> tabel Daftar Pengguna dan tampil di kartu kiosk presensi.
           </p>
         </div>
 
@@ -338,7 +340,7 @@
             </label>
           </div>
           <div class="table-wrap">
-            <table id="users"><thead><tr><th>ID</th><th>Nama</th><th>Hari Ini</th><th>Terakhir Hadir</th><th>Aksi</th></tr></thead><tbody></tbody></table>
+            <table id="users"><thead><tr><th>Foto</th><th>Nama</th><th>ID</th><th>Hari Ini</th><th>Terakhir Hadir</th><th>Aksi</th></tr></thead><tbody></tbody></table>
           </div>
         </div>
       </section>
@@ -359,6 +361,7 @@
           <div class="stat-block"><span class="stat-k">Recognition models</span><span class="stat-v-sm" id="set-models">—</span></div>
           <div class="stat-block"><span class="stat-k">Sync</span><span class="stat-v-sm" id="set-sync">—</span></div>
           <div class="stat-block"><span class="stat-k">Face throttle</span><span class="stat-v-sm">60 s / user</span></div>
+          <div class="stat-block"><span class="stat-k">Template wajah</span><span class="stat-v-sm" id="set-templates">—</span></div>
         </div>
 
         <div class="panel">
@@ -414,6 +417,6 @@
     </div>
   </div>
 
-  <script src="/static/app.js?v=23"></script>
+  <script src="/static/app.js?v=26"></script>
 </body>
 </html>

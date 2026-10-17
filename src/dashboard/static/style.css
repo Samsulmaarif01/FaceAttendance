@@ -178,13 +178,9 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; backgrou
 /* Idle-only reticle: hide the static scan/reticle while real faces are tracked
    or while a photo is displayed, so it never overlaps the tracking boxes. */
 .stage.tracking .reticle { opacity: 0; }
-.stage.tracking .laser,
-.stage.photo-mode .reticle,
-.stage.photo-mode .laser { opacity: 0; }
-.stage.tracking .laser,
-.stage.photo-mode .laser { animation: none; }
-.stage.tracking .reticle,
-.stage.photo-mode .reticle { pointer-events: none; }
+.stage.tracking .laser { opacity: 0; }
+.stage.tracking .laser { animation: none; }
+.stage.tracking .reticle { pointer-events: none; }
 .reticle-corners { position: absolute; inset: 0; }
 .reticle-corners .c { position: absolute; width: 30px; height: 30px; border: 2px solid var(--primary); box-shadow: 0 0 12px var(--primary); }
 .reticle-corners .tl { top: 0; left: 0; border-right: 0; border-bottom: 0; border-top-left-radius: 14px; }
@@ -303,6 +299,15 @@ tbody tr:hover { background: var(--surface-low); }
 .enroll-row input[type="text"] { width: 100%; min-width: 0; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-low); color: var(--on-surface); font: inherit; }
 .enroll-row input[type="text"]:focus { outline: none; border-color: var(--primary); }
 .enroll-row .btn { justify-content: center; white-space: nowrap; }
+
+/* Foto user (avatar) di tabel Daftar Pengguna */
+.photo-cell { width: 52px; }
+.photo-thumb { width: 38px; height: 38px; border-radius: 50%; object-fit: cover; background: var(--surface-highest); border: 1px solid var(--border); display: block; }
+.photo-empty { width: 38px; height: 38px; border-radius: 50%; background: var(--surface-highest); display: flex; align-items: center; justify-content: center; color: var(--primary); font-size: 12px; font-weight: 700; }
+
+/* Foto user di kartu hasil sebelah kios Face ID */
+.match-avatar-photo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 18px; }
+#match-avatar-photo[hidden] { display: none; }
 
 /* ── Dialog hapus pengguna ────────────────────────────────── */
 .dlg-backdrop { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(2, 6, 18, 0.62); backdrop-filter: blur(3px); animation: toast-in 0.15s ease-out; }

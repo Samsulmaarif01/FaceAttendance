@@ -245,7 +245,21 @@ async function loadHealth() {
     $("set-detector").textContent = h.detector_loaded ? "Loaded (YuNet / SCRFD)" : "Not loaded";
     $("set-matcher").textContent = h.matcher_backend || "—";
     $("set-models").textContent = String(h.recognition_models);
+    const bad = h.templates_unreadable || 0;
+    $("set-templates").textContent = bad
+      ? `${bad} rusak (${h.templates_loaded} terbaca)`
+      : `${h.templates_loaded || 0} aktif`;
     $("set-sync").textContent = h.sync_enabled ? "Enabled" : "Disabled (offline demo)";
+    // Kalau kunci enkripsi tidak cocok, tidak ada wajah yang bisa dikenali.
+    if (h.templates_unreadable > 0) {
+      setBadge("template rusak", "err");
+      setStatus(
+        `${h.templates_unreadable} template wajah tidak bisa dibaca (kunci enkripsi tidak cocok: ` +
+        `${(h.templates_unreadable_ids || []).join(", ")}). Tidak ada wajah yang bisa dikenali ` +
+        `sampai file data/db.key dipulihkan.`,
+        "err",
+      );
+    }
     if (!h.sync_enabled) {
       const btn = $("btn-sync");
       btn.disabled = true;
@@ -277,7 +291,6 @@ async function startCamera() {
     video.hidden = false;
     $("video-msg").hidden = true;
     $("laser").hidden = false;
-    if (stageEl) stageEl.classList.remove("photo-mode");
     setTracking(false);
     clearPresence();
     $("btn-camera").querySelector("span").textContent = "Hentikan Kamera";
@@ -362,19 +375,6 @@ function drawFaces(faces) {
   }
 }
 
-function drawRegisteredLabel(name) {
-  const ctx = overlay.getContext("2d");
-  ctx.clearRect(0, 0, frameW, frameH);
-  const label = `registered: ${name}`;
-  const boxH = Math.max(18, frameW / 30);
-  ctx.font = `${Math.max(12, frameW / 42)}px system-ui, sans-serif`;
-  ctx.fillStyle = "#4edea3";
-  ctx.fillRect(0, 0, ctx.measureText(label).width + 12, boxH);
-  ctx.fillStyle = "#003824";
-  ctx.textBaseline = "middle";
-  ctx.fillText(label, 6, boxH / 2);
-}
-
 async function recognizeBlob(blob, direction, log) {
   const fd = new FormData();
   fd.append("file", blob, "frame.jpg");
@@ -421,6 +421,19 @@ function updateMatchCard(face, recording) {
   cardUserId = m.user_id;
 
   $("match-avatar-text").textContent = initials(name);
+  // Tampilkan foto user di sebelah kios Face ID; fallback ke inisial.
+  const av = $("match-avatar-photo");
+  if (info.has_photo) {
+    av.hidden = false;
+    if (av.getAttribute("data-uid") !== m.user_id) {
+      av.setAttribute("data-uid", m.user_id);
+      av.src = photoUrl(m.user_id);
+    }
+  } else {
+    av.hidden = true;
+    av.removeAttribute("data-uid");
+    av.removeAttribute("src");
+  }
   $("match-name").textContent = name;
   $("match-role").textContent = "Pengguna terverifikasi";
   $("match-uid").textContent = `NIK: ${m.user_id}`;
@@ -576,16 +589,30 @@ async function refreshStats() {
 /* ── Users ─────────────────────────────────────────────────── */
 let showArchived = false;
 
+const photoUrl = (id) => `/api/users/${encodeURIComponent(id)}/photo`;
+
+/* Avatar di tabel: foto bila ada, jika tidak jatuh ke inisial. */
+function photoCell(u) {
+  if (u.has_photo) {
+    return `<img class="photo-thumb" src="${photoUrl(u.id)}" alt="" loading="lazy" ` +
+      `onerror="this.replaceWith(Object.assign(document.createElement('span'),` +
+      `{className:'photo-empty',textContent:${JSON.stringify(initials(u.name))}}))" />`;
+  }
+  return `<span class="photo-empty">${esc(initials(u.name))}</span>`;
+}
+
 async function refreshUsers() {
   try {
     const data = await fetchJSON(`/api/users?include_archived=${showArchived ? "true" : "false"}`);
     userMap = {};
-    data.users.forEach((u) => { userMap[u.id] = { name: u.name, count: u.attendance_count }; });
+    data.users.forEach((u) => {
+      userMap[u.id] = { name: u.name, count: u.attendance_count, has_photo: u.has_photo === true };
+    });
     $("users-count").textContent = `(${data.count})`;
     $("btn-archived").checked = showArchived;
     const tbody = $("users").querySelector("tbody");
     if (!data.users.length) {
-      tbody.innerHTML = `<tr><td class="table-empty" colspan="5">${
+      tbody.innerHTML = `<tr><td class="table-empty" colspan="6">${
         showArchived ? "Belum ada pengguna terdaftar." : "Belum ada pengguna aktif — centang “Tampilkan arsip” untuk melihat pengguna yang dinonaktifkan."
       }</td></tr>`;
       return;
@@ -603,9 +630,9 @@ async function refreshUsers() {
           ? `<button class="btn icon-only" data-restore="${esc(u.id)}" title="Pulihkan pengguna"><svg class="icon sm"><use href="#i-check"/></svg></button>`
           : `<button class="btn danger icon-only" data-delete="${esc(u.id)}" title="Hapus pengguna"><svg class="icon sm"><use href="#i-trash"/></svg></button>`;
         return `<tr${archived ? ' class="row-archived"' : ""}>` +
+          `<td class="photo-cell">${photoCell(u)}</td>` +
+          `<td><div class="user-name-cell"><span class="user-name-text">${esc(u.name)}</span></div></td>` +
           `<td class="mono nowrap">${esc(u.id)}</td>` +
-          `<td><div class="user-name-cell"><span class="avatar-cell">${esc(initials(u.name))}</span>` +
-          `<span class="user-name-text">${esc(u.name)}</span></div></td>` +
           `<td class="today-cell"><div class="chip-row">${today}</div></td>` +
           `<td class="mono nowrap">${last}</td>` +
           `<td class="action-cell">${action}</td>` +
@@ -802,6 +829,11 @@ function enrollFailed(message) {
   return null;
 }
 
+/* Catatan: registrasi TIDAK pernah menyentuh #photo/#overlay di panggung kios
+   presensi — `liveLoop()` berhenti kalau `!photo.hidden`, jadi menaruh foto di
+   sana akan mematikan pengenalan kiosk. Pratinjau cukup lewat kolom Foto di
+   Daftar Pengguna dan kartu hasil sebelah kios Face ID. */
+
 async function onEnroll() {
   const name = $("enroll-name").value.trim();
   const userId = $("enroll-id").value.trim();
@@ -828,11 +860,8 @@ async function onUpload(file) {
   const userId = $("enroll-id").value.trim();
   hideToast();
   try {
-    await showPhoto(file);
     const data = await enrollBlob(file, name, userId);
-    if (describeEnroll(data, " dari gambar")) {
-      drawRegisteredLabel(data.name);
-    }
+    describeEnroll(data, " dari gambar");
   } catch (e) {
     if (String(e.message).indexOf("Isi nama") >= 0) {
       enrollFailed("Wajah ini belum terdaftar — isi nama untuk mendaftarkan pengguna baru.");
@@ -841,19 +870,6 @@ async function onUpload(file) {
       enrollFailed("Galat pendaftaran: " + e.message);
     }
   }
-}
-
-async function showPhoto(file) {
-  if (photo.src) URL.revokeObjectURL(photo.src);
-  photo.src = URL.createObjectURL(file);
-  photo.hidden = false;
-  video.hidden = true;
-  $("video-msg").hidden = true;
-  $("laser").hidden = true;
-  if (stageEl) stageEl.classList.add("photo-mode");
-  await photo.decode();
-  setFrameSize(photo.naturalWidth, photo.naturalHeight);
-  overlay.getContext("2d").clearRect(0, 0, frameW, frameH);
 }
 
 /* ── Wiring ────────────────────────────────────────────────── */
