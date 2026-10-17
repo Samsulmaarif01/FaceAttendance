@@ -74,24 +74,31 @@ class TestEnroll:
     def test_enroll_assigns_id_and_lists_user(self, client):
         res = client.post("/api/enroll", data={"name": "Bob", "user_id": "b1"}, files=_files(3))
         assert res.status_code == 200
-        assert res.json() == {
-            "success": True,
-            "user_id": "b1",
-            "name": "Bob",
-            "embedding_dim": 512,
-        }
+        body = res.json()
+        assert body["success"] is True
+        assert body["user_id"] == "b1"
+        assert body["name"] == "Bob"
+        assert body["embedding_dim"] == 512
+        assert body["duplicate"] is False
         users = client.get("/api/users").json()
         assert users["count"] == 1
         assert users["users"][0]["id"] == "b1"
 
-    def test_duplicate_enroll_conflicts(self, client):
+    def test_conflicting_user_id_with_a_different_face_is_409(self, client):
+        """user_id yang sama tapi wajah BERBEDA tetap ditolak (409) —
+        mencegah template orang lain tertimpa."""
         client.post("/api/enroll", data={"name": "Bob", "user_id": "b1"}, files=_files(4))
-        res = client.post("/api/enroll", data={"name": "Bob", "user_id": "b1"}, files=_files(4))
+        res = client.post("/api/enroll", data={"name": "Bob", "user_id": "b1"}, files=_files(28))
         assert res.status_code == 409
 
-    def test_missing_name_is_validation_error(self, client):
-        res = client.post("/api/enroll", files=_files(5))
-        assert res.status_code == 422
+    def test_missing_name_is_rejected_after_face_check(self, client):
+        """Nama boleh kosong saat unggah (backend cek wajah dulu), tapi wajah baru
+        tanpa nama harus ditolak dengan pesan yang jelas."""
+        res = client.post("/api/enroll", data={"name": ""}, files=_files(5))
+        assert res.status_code == 400
+        assert "nama" in res.json()["detail"].lower()
+        # tidak boleh ada user yang tersimpan tanpa nama
+        assert client.get("/api/users").json()["count"] == 0
 
 
 class TestAttendanceAndStats:
@@ -128,6 +135,185 @@ class TestAttendanceAndStats:
         user = client.get("/api/users").json()["users"][0]
         assert user["attendance_count"] == 1
         assert user["last_attendance"] is not None
+
+
+class TestEnrollDuplicates:
+    """Daftar dari gambar /Daftarkan wajah hanya untuk mendaftarkan wajah, dan
+    tidak boleh membuat pengguna ganda untuk wajah yang sama."""
+
+    def test_same_face_twice_does_not_create_second_user(self, client):
+        r1 = client.post("/api/enroll", data={"name": "Samsul Maarif"}, files=_files(21))
+        assert r1.status_code == 200 and r1.json()["success"] is True
+
+        r2 = client.post("/api/enroll", data={"name": "Samsul Maarif (lagi)"}, files=_files(21))
+        assert r2.status_code == 200
+        body = r2.json()
+        assert body["success"] is False
+        assert body["duplicate"] is True
+        assert body["existing_user_id"] == r1.json()["user_id"]
+        assert body["existing_name"] == "Samsul Maarif"
+        assert body["similarity"] > 0.9
+        # tidak ada pengguna baru
+        assert client.get("/api/users").json()["count"] == 1
+
+    def test_reenroll_same_user_id_refreshes_template(self, client):
+        first = client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(22)).json()
+        again = client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(22)).json()
+        assert again["success"] is True
+        assert again["updated"] is True
+        assert again["duplicate"] is True          # wajah memang yang sama
+        assert again["existing_user_id"] == "s1"
+        assert client.get("/api/users").json()["count"] == 1
+        assert first["user_id"] == "s1"
+
+    def test_known_face_as_different_user_id_is_refused(self, client):
+        client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(23))
+        r = client.post("/api/enroll", data={"name": "Orang lain", "user_id": "s2"}, files=_files(23))
+        assert r.status_code == 200
+        body = r.json()
+        assert body["duplicate"] is True
+        assert body["existing_user_id"] == "s1"
+        assert client.get("/api/users").json()["count"] == 1
+
+    def test_enroll_new_face_without_name_is_rejected(self, client):
+        r = client.post("/api/enroll", data={"name": ""}, files=_files(24))
+        assert r.status_code == 400
+        assert "nama" in r.json()["detail"].lower()
+
+    def test_enrollment_never_writes_attendance(self, client):
+        client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(25))
+        assert client.get("/api/stats").json()["total"] == 0
+
+
+class TestDeletedUserRecovery:
+    """User dihapus = soft delete; riwayat & template harus tetap bisa dipulihkan."""
+
+    def test_attendance_keeps_name_after_user_deleted(self, client):
+        client.post("/api/enroll", data={"name": "Samsul Maarif", "user_id": "s1"}, files=_files(26))
+        client.post("/api/recognize?direction=in", files=_files(26))
+        assert client.delete("/api/users/s1").json()["success"] is True
+
+        records = client.get("/api/attendance").json()["records"]
+        assert len(records) == 1
+        # riwayat milik user terhapus tetap menampilkan nama, bukan "—"
+        assert records[0]["name"] == "Samsul Maarif"
+
+    def test_reenroll_deleted_face_reactivates_and_keeps_history(self, client):
+        client.post("/api/enroll", data={"name": "Samsul Maarif", "user_id": "s1"}, files=_files(27))
+        client.post("/api/recognize?direction=in", files=_files(27))
+        client.delete("/api/users/s1")
+
+        r = client.post("/api/enroll", data={"name": "Samsul Maarif"}, files=_files(27))
+        assert r.status_code == 200
+        body = r.json()
+        assert body["success"] is True
+        assert body["reactivated"] is True
+        assert body["user_id"] == "s1", "harus memakai user_id yang sama"
+
+        users = client.get("/api/users").json()
+        assert users["count"] == 1, "tidak boleh membuat pengguna kedua"
+        # riwayat lama tetap menempel ke user yang diaktifkan kembali
+        assert client.get("/api/users").json()["users"][0]["attendance_count"] == 1
+
+
+    def test_reenroll_deleted_face_reactivates_even_with_other_user_id(self, client):
+        """Semua user non-aktif + kolom User ID terisi id LAIN.
+
+        Harus mengaktifkan kembali, bukan menjawab "sudah terdaftar" — kalau
+        tidak, Data Karyawan tetap kosong dan wajahnya tidak akan bisa absen.
+        """
+        client.post("/api/enroll", data={"name": "Samsul Maarif", "user_id": "s1"}, files=_files(31))
+        client.delete("/api/users/s1")
+        assert client.get("/api/users").json()["count"] == 0
+
+        r = client.post("/api/enroll", data={"name": "Samsul", "user_id": "Id001"}, files=_files(31))
+        assert r.status_code == 200
+        body = r.json()
+        assert body["success"] is True
+        assert body["reactivated"] is True, "user non-aktif harus diaktifkan kembali"
+        assert body["user_id"] == "s1"
+
+        users = client.get("/api/users").json()
+        assert users["count"] == 1, "harus ada tepat satu user aktif"
+        assert users["users"][0]["id"] == "s1"
+
+    def test_reenroll_deleted_face_then_can_attend(self, client):
+        """Setelah diaktifkan kembali, wajahnya harus bisa absen lagi."""
+        client.post("/api/enroll", data={"name": "Samsul Maarif", "user_id": "s1"}, files=_files(32))
+        client.delete("/api/users/s1")
+        client.post("/api/enroll", data={"name": "Samsul Maarif"}, files=_files(32))
+
+        face = client.post("/api/recognize?direction=in", files=_files(32)).json()["faces"][0]
+        assert face["match"] is not None and face["match"]["matched"] is True
+        assert face["attendance_logged"] is True
+
+
+class TestDeleteModes:
+    """Admin punya dua pilihan: arsipkan (soft delete) atau hapus permanen."""
+
+    def test_archive_is_the_default_and_keeps_history(self, client):
+        client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(40))
+        client.post("/api/recognize?direction=in", files=_files(40))
+        client.post("/api/recognize?direction=out", files=_files(40))
+        assert client.get("/api/stats").json()["total"] == 2
+
+        res = client.delete("/api/users/s1")
+        assert res.status_code == 200
+        assert res.json()["mode"] == "archived"
+        # user hilang dari daftar aktif, tapi riwayat tetap ada
+        assert client.get("/api/users").json()["count"] == 0
+        records = client.get("/api/attendance").json()["records"]
+        assert len(records) == 2
+        assert records[0]["name"] == "Samsul"
+
+    def test_archived_user_can_be_listed_and_restored(self, client):
+        client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(41))
+        client.post("/api/recognize?direction=in", files=_files(41))
+        client.delete("/api/users/s1")
+
+        listed = client.get("/api/users?include_archived=true").json()
+        assert listed["count"] == 1
+        assert listed["users"][0]["is_archived"] is True
+        assert listed["users"][0]["attendance_count"] == 1
+
+        res = client.post("/api/users/s1/restore")
+        assert res.status_code == 200
+        assert res.json()["mode"] == "restored"
+        assert client.get("/api/users").json()["count"] == 1
+        assert client.get("/api/users").json()["users"][0]["is_archived"] is False
+
+    def test_permanent_delete_removes_user_and_their_attendance(self, client):
+        client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(42))
+        client.post("/api/recognize?direction=in", files=_files(42))
+        client.post("/api/recognize?direction=out", files=_files(42))
+
+        res = client.delete("/api/users/s1?permanent=true")
+        assert res.status_code == 200
+        assert res.json()["mode"] == "permanent"
+        assert res.json()["attendance_deleted"] == 2
+        assert client.get("/api/users?include_archived=true").json()["count"] == 0
+        assert client.get("/api/stats").json()["total"] == 0
+
+    def test_permanent_delete_frees_the_face_for_a_clean_reenroll(self, client):
+        """Setelah hapus permanen, template hilang -> wajah yang sama boleh
+        didaftarkan lagi sebagai user BARU (bukan dianggap duplikat)."""
+        client.post("/api/enroll", data={"name": "Samsul", "user_id": "s1"}, files=_files(43))
+        client.delete("/api/users/s1")
+        # arsip dulu -> masih terdeteksi duplikat dan diaktifkan kembali
+        again = client.post("/api/enroll", data={"name": "Samsul", "user_id": "s2"}, files=_files(43)).json()
+        assert again["reactivated"] is True
+
+        client.delete("/api/users/s1?permanent=true")
+        fresh = client.post("/api/enroll", data={"name": "Samsul Baru", "user_id": "s3"}, files=_files(43)).json()
+        assert fresh["success"] is True
+        assert not fresh.get("duplicate")
+        assert fresh["user_id"] == "s3"
+
+    def test_restore_missing_user_is_404(self, client):
+        assert client.post("/api/users/nope/restore").status_code == 404
+
+    def test_permanent_delete_missing_user_is_404(self, client):
+        assert client.delete("/api/users/nope?permanent=true").status_code == 404
 
 
 class TestAttendanceDirection:
@@ -284,7 +470,9 @@ class TestAttendanceManagement:
         client.post("/api/enroll", data={"name": "Bob", "user_id": "b1"}, files=_files(8))
         res = client.delete("/api/users/b1")
         assert res.status_code == 200
-        assert res.json() == {"success": True, "id": "b1", "deleted": None}
+        assert res.json()["success"] is True
+        assert res.json()["id"] == "b1"
+        assert res.json()["mode"] == "archived"   # default = arsip, bukan hapus permanen
         assert client.get("/api/users").json()["count"] == 0
 
     def test_delete_missing_user_is_404(self, client):

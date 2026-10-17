@@ -45,6 +45,7 @@ class AttendanceRecord:
     synced: bool = False
     device_id: str = ""
     direction: str = "in"  # "in" (masuk) or "out" (pulang)
+    name: Optional[str] = None  # resolved from users, kept even if user was deleted
 
 
 class BioHasher:
@@ -212,9 +213,12 @@ class Database:
                 )
         return None
 
-    def get_all_users(self) -> List[User]:
+    def get_all_users(self, include_archived: bool = False) -> List[User]:
+        query = "SELECT * FROM users"
+        if not include_archived:
+            query += " WHERE is_active = 1"
         with self._get_conn() as conn:
-            rows = conn.execute("SELECT * FROM users WHERE is_active = 1").fetchall()
+            rows = conn.execute(query).fetchall()
             return [
                 User(
                     id=r["id"],
@@ -266,6 +270,81 @@ class Database:
                 })
             return cur.rowcount > 0
 
+    def reactivate_user(
+        self,
+        user_id: str,
+        embedding: Optional[np.ndarray] = None,
+        name: Optional[str] = None,
+    ) -> bool:
+        """
+        Re-enable a soft-deleted user, keeping their attendance history.
+
+        Used when the same face is enrolled again after the owner was deleted:
+        the original row (and therefore every record it owns) is restored
+        instead of creating a duplicate user that would orphan the history.
+        """
+        with self._get_conn() as conn:
+            if name:
+                conn.execute("UPDATE users SET name = ? WHERE id = ?", (name, user_id))
+            cur = conn.execute("UPDATE users SET is_active = 1 WHERE id = ?", (user_id,))
+            conn.commit()
+            reactivated = cur.rowcount > 0
+        if not reactivated:
+            return False
+        if embedding is not None:
+            self.update_user_embedding(user_id, embedding)
+        self._audit("user_reactivated", user_id, {"name": name} if name else {})
+        self._enqueue_sync({
+            "id": secrets.token_urlsafe(16),
+            "type": "user_reactivated",
+            "user_id": user_id,
+            "name": name or "",
+            "timestamp": datetime.utcnow().isoformat(),
+        })
+        return True
+
+    def hard_delete_user(self, user_id: str) -> Tuple[bool, int]:
+        """
+        Permanently delete a user AND every attendance record they own.
+
+        Unlike :meth:`delete_user` (soft delete / archive) this leaves nothing
+        behind: the row and its Fernet-encrypted template are gone, so the face
+        can no longer be recognised as "already registered" and re-enrolling it
+        produces a genuinely new user. Returns (deleted, attendance_deleted).
+        """
+        with self._get_conn() as conn:
+            cur = conn.execute("DELETE FROM attendance WHERE user_id = ?", (user_id,))
+            attendance_deleted = cur.rowcount
+            cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            conn.commit()
+            deleted = cur.rowcount > 0
+        if deleted:
+            self._audit("user_hard_deleted", user_id, {"attendance_deleted": attendance_deleted})
+            self._enqueue_sync({
+                "id": secrets.token_urlsafe(16),
+                "type": "user_hard_deleted",
+                "user_id": user_id,
+                "attendance_deleted": attendance_deleted,
+                "timestamp": datetime.utcnow().isoformat(),
+            })
+        return deleted, attendance_deleted
+
+    def restore_user(self, user_id: str) -> bool:
+        """Bring an archived (soft-deleted) user back, template untouched."""
+        with self._get_conn() as conn:
+            cur = conn.execute("UPDATE users SET is_active = 1 WHERE id = ?", (user_id,))
+            conn.commit()
+            restored = cur.rowcount > 0
+        if restored:
+            self._audit("user_restored", user_id)
+            self._enqueue_sync({
+                "id": secrets.token_urlsafe(16),
+                "type": "user_restored",
+                "user_id": user_id,
+                "timestamp": datetime.utcnow().isoformat(),
+            })
+        return restored
+
     def verify_user(self, user_id: str, embedding: np.ndarray) -> bool:
         user = self.get_user(user_id)
         if not user:
@@ -276,7 +355,7 @@ class Database:
             self._audit("verification_failed", user_id)
         return verified
 
-    def get_user_templates(self) -> Dict[str, np.ndarray]:
+    def get_user_templates(self, include_inactive: bool = False) -> Dict[str, np.ndarray]:
         """
         Return user_id -> decrypted embedding for active users.
 
@@ -284,13 +363,18 @@ class Database:
         biohashed template) so that 1:N matching is possible; they are only
         decrypted in memory. The biohashed template remains the primary record
         for 1:1 verification.
+
+        ``include_inactive=True`` also returns soft-deleted users. Enrollment
+        uses that so a face whose owner was deleted is recognised as "the same
+        person" instead of silently creating a second user.
         """
         templates: Dict[str, np.ndarray] = {}
+        query = """SELECT id, encrypted_embedding FROM users
+                   WHERE encrypted_embedding IS NOT NULL"""
+        if not include_inactive:
+            query += " AND is_active = 1"
         with self._get_conn() as conn:
-            rows = conn.execute(
-                """SELECT id, encrypted_embedding FROM users
-                   WHERE is_active = 1 AND encrypted_embedding IS NOT NULL"""
-            ).fetchall()
+            rows = conn.execute(query).fetchall()
         for row in rows:
             try:
                 templates[row["id"]] = self._decrypt_embedding(row["encrypted_embedding"])
@@ -444,7 +528,9 @@ class Database:
     def list_attendance(self, limit: int = 50) -> List[AttendanceRecord]:
         with self._get_conn() as conn:
             rows = conn.execute(
-                """SELECT * FROM attendance ORDER BY timestamp DESC LIMIT ?""",
+                """SELECT a.*, u.name AS user_name FROM attendance a
+                   LEFT JOIN users u ON u.id = a.user_id
+                   ORDER BY a.timestamp DESC LIMIT ?""",
                 (limit,),
             ).fetchall()
             return [
@@ -457,6 +543,7 @@ class Database:
                     synced=bool(r["synced"]),
                     device_id=r["device_id"],
                     direction=r["direction"] or "in",
+                    name=r["user_name"],
                 )
                 for r in rows
             ]

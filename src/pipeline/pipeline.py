@@ -5,6 +5,7 @@ Integrates camera, detection, recognition, liveness, and database.
 
 import cv2
 import numpy as np
+import secrets
 import time
 from typing import List, Optional, Dict
 from dataclasses import dataclass
@@ -88,6 +89,14 @@ class PipelineConfig:
 
     # Attendance (phase 6)
     attendance_throttle_seconds: float = 60.0  # at most one record per user per window
+
+    # Enrollment (duplicate guard)
+    # Threshold above which an enrolled face counts as the SAME person as an
+    # existing user. Deliberately stricter than `recognition_threshold`: in
+    # enrollment a false "new user" is silent (duplicate rows appear unnoticed),
+    # while a false "already enrolled" is visible (the operator sees the
+    # similarity and can override), so erring towards "duplicate" is safer.
+    enroll_duplicate_threshold: float = 0.60
 
     # Demo / testing (phase 6). When enabled, the pipeline runs without ONNX
     # models: a synthetic embedding model is used and liveness is bypassed.
@@ -478,11 +487,30 @@ class FacePipeline:
                 return []
         return self._dummy_detection(frame)
 
-    def enroll_from_frame(self, frame: np.ndarray, user_id: str, name: str) -> Optional[Dict]:
+    def enroll_from_frame(
+        self,
+        frame: np.ndarray,
+        user_id: Optional[str],
+        name: str,
+    ) -> Optional[Dict]:
         """
-        Enroll a user from a single frame (used by the web API / self-service UI).
+        Enroll a face from a single frame (used by the web API / self-service UI).
 
-        Returns an info dict, or None when no usable face is found.
+        Enrolling is ONLY for registering a face — it never writes attendance.
+
+        The new embedding is matched against every stored template (including
+        soft-deleted users) so an already-registered face is never registered
+        twice:
+
+        - same face, soft-deleted owner  -> reactivate that user so the existing
+          attendance history stays linked to them
+        - same face, same ``user_id``    -> refresh the template ("Daftar ulang")
+        - same face, other/no ``user_id``-> refuse, report who already owns it
+        - otherwise                       -> insert a new user
+
+        ``user_id`` may be None; a random one is generated only when a new row
+        is actually inserted. Returns an info dict, or None when no usable face
+        is found.
         """
         detections = self.quality_gate.check_batch(frame, self._detect(frame))
         if not detections:
@@ -491,14 +519,78 @@ class FacePipeline:
         det = max(detections, key=lambda d: d.bbox[2] * d.bbox[3])
         embedding = self.ensemble_extractor.extract(frame, det.landmarks)
 
-        success = self.database.add_user(user_id, name, embedding)
-        return {
-            "success": success,
+        info: Dict = {
+            "success": False,
             "user_id": user_id,
             "name": name,
             "confidence": float(det.confidence),
             "embedding_dim": int(embedding.shape[0]),
         }
+
+        existing = self._find_same_person(embedding)
+        if existing is not None:
+            owner, similarity = existing
+            info.update({
+                "duplicate": True,
+                "existing_user_id": owner.id,
+                "existing_name": owner.name,
+                "existing_is_active": owner.is_active,
+                "similarity": similarity,
+            })
+            # Re-registering the same person id: refresh the template in place.
+            if user_id and owner.id == user_id:
+                self.database.update_user_embedding(user_id, embedding)
+                info["success"] = True
+                info["updated"] = True
+                return info
+            # Owner was deleted earlier: bring them (and their history) back.
+            # This must happen even when the caller filled in a *different*
+            # user_id — otherwise we would answer "already registered" while
+            # nobody is actually active, and the face could never be used.
+            if not owner.is_active:
+                taken = user_id if (user_id and user_id != owner.id) else None
+                if taken is not None and self.database.get_user(taken) is not None:
+                    # The requested id already belongs to somebody else.
+                    info["success"] = False
+                    info["conflict"] = True
+                    return info
+                self.database.reactivate_user(owner.id, embedding=embedding, name=name or owner.name)
+                info["success"] = True
+                info["reactivated"] = True
+                info["user_id"] = owner.id
+                info["name"] = owner.name
+                return info
+            # Owner is active: only a plain duplicate unless the caller pointed
+            # an already-taken id at this face.
+            if user_id and self.database.get_user(user_id) is not None:
+                info["success"] = False
+                info["conflict"] = True
+            return info
+
+        uid = user_id or secrets.token_urlsafe(8)
+        if not (name or "").strip():
+            # A brand-new face with no name: refuse before inserting so an empty
+            # row can never be created.
+            info["needs_name"] = True
+            return info
+        info["user_id"] = uid
+        info["success"] = self.database.add_user(uid, name, embedding)
+        return info
+
+    def _find_same_person(self, embedding: np.ndarray) -> Optional[tuple]:
+        """Return (owner User, similarity) if the face already belongs to someone."""
+        templates = self.database.get_user_templates(include_inactive=True)
+        if not templates:
+            return None
+        match = self.matcher.match(embedding, templates)
+        if match is None or not match.matched:
+            return None
+        if match.similarity < self.config.enroll_duplicate_threshold:
+            return None
+        owner = self.database.get_user(match.user_id)
+        if owner is None:
+            return None
+        return owner, float(match.similarity)
 
     def _dummy_detection(self, frame: np.ndarray) -> List[FaceDetection]:
         """Create a dummy detection for testing when no model is available."""

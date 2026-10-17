@@ -112,22 +112,32 @@ def create_app(
 
     @app.post("/api/enroll", response_model=schemas.EnrollResponse)
     async def enroll(
-        name: str = Form(...),
+        name: str = Form(""),
         user_id: Optional[str] = Form(None),
         file: UploadFile = File(...),
     ) -> dict:
         frame = decode_image(await file.read())
-        uid = user_id or secrets.token_urlsafe(8)
-        info = pipe.enroll_from_frame(frame, uid, name)
+        # user_id stays None when the caller did not supply one: the pipeline
+        # only invents an id once it decides this really is a new user.
+        info = pipe.enroll_from_frame(frame, user_id, (name or "").strip())
         if info is None:
             raise HTTPException(status_code=400, detail="No usable face detected")
+        if info.get("duplicate"):
+            # Not an error: the face is already registered. 200 lets the UI show
+            # an informative banner instead of a red failure.
+            return info
+        if info.get("needs_name"):
+            raise HTTPException(
+                status_code=400,
+                detail="Isi nama untuk mendaftarkan pengguna baru",
+            )
         if not info["success"]:
-            raise HTTPException(status_code=409, detail=f"User '{uid}' already exists")
+            raise HTTPException(status_code=409, detail=f"User '{info['user_id']}' already exists")
         return info
 
     @app.get("/api/users", response_model=schemas.UsersResponse)
-    def users() -> dict:
-        people = pipe.database.get_all_users()
+    def users(include_archived: bool = False) -> dict:
+        people = pipe.database.get_all_users(include_archived=include_archived)
         summary = pipe.database.get_attendance_summary()
         today = pipe.database.get_today_status()
         result = []
@@ -138,6 +148,7 @@ def create_app(
                 "id": u.id,
                 "name": u.name,
                 "is_active": bool(u.is_active),
+                "is_archived": not bool(u.is_active),
                 "created_at": u.created_at.isoformat(),
                 "attendance_count": int(stats.get("count", 0)),
                 "last_attendance": stats.get("last"),
@@ -147,11 +158,34 @@ def create_app(
         return {"users": result, "count": len(result)}
 
     @app.delete("/api/users/{user_id}", response_model=schemas.DeleteResponse)
-    def delete_user(user_id: str) -> dict:
+    def delete_user(user_id: str, permanent: bool = False) -> dict:
+        """Archive (soft delete, default) or permanently delete a user.
+
+        * archive   -> keeps the template and every attendance record, so the
+                       face is still recognised as "already registered" and
+                       re-enrolling reactivates the same user instead of
+                       creating a duplicate. Restorable via /api/users/{id}/restore.
+        * permanent -> removes the user, their template and all their attendance
+                       records. Irreversible.
+        """
+        if permanent:
+            deleted, attendance_deleted = pipe.database.hard_delete_user(user_id)
+            if not deleted:
+                raise HTTPException(status_code=404, detail=f"User '{user_id}' not found")
+            return {"success": True, "id": user_id, "mode": "permanent",
+                    "attendance_deleted": attendance_deleted}
         if not pipe.database.delete_user(user_id):
             raise HTTPException(status_code=404, detail=f"User '{user_id}' not found")
         pipe.reset_attendance_throttle(user_id)
-        return {"success": True, "id": user_id}
+        return {"success": True, "id": user_id, "mode": "archived", "attendance_deleted": 0}
+
+    @app.post("/api/users/{user_id}/restore", response_model=schemas.DeleteResponse)
+    def restore_user(user_id: str) -> dict:
+        """Restore an archived user so they show up in Data Karyawan again."""
+        if not pipe.database.restore_user(user_id):
+            raise HTTPException(status_code=404, detail=f"User '{user_id}' not found")
+        pipe.reset_attendance_throttle(user_id)
+        return {"success": True, "id": user_id, "mode": "restored", "attendance_deleted": 0}
 
     @app.get("/api/attendance", response_model=schemas.AttendanceResponse)
     def attendance(limit: int = 50) -> dict:
@@ -166,6 +200,7 @@ def create_app(
                     "liveness_score": float(r.liveness_score),
                     "synced": bool(r.synced),
                     "direction": r.direction,
+                    "name": r.name,
                 }
                 for r in records
             ],

@@ -56,15 +56,25 @@ class RecognizeResponse(BaseModel):
 
 class EnrollResponse(BaseModel):
     success: bool
-    user_id: str
-    name: str
-    embedding_dim: int
+    user_id: Optional[str] = None
+    name: str = ""
+    embedding_dim: int = 0
+    confidence: Optional[float] = None
+    # Duplicate guard: set when the face already belongs to a known user.
+    duplicate: bool = False
+    existing_user_id: Optional[str] = None
+    existing_name: Optional[str] = None
+    existing_is_active: Optional[bool] = None
+    similarity: Optional[float] = None
+    updated: bool = False        # template refreshed for the same user_id
+    reactivated: bool = False    # soft-deleted owner restored, history kept
 
 
 class UserInfo(BaseModel):
     id: str
     name: str
     is_active: bool
+    is_archived: bool = False
     created_at: str
     attendance_count: int = 0
     last_attendance: Optional[str] = None
@@ -81,6 +91,9 @@ class DeleteResponse(BaseModel):
     success: bool
     id: Optional[str] = None
     deleted: Optional[int] = None
+    # "archived" | "permanent" | "restored"
+    mode: Optional[str] = None
+    attendance_deleted: int = 0
 
 
 class AttendanceInfo(BaseModel):
@@ -91,6 +104,7 @@ class AttendanceInfo(BaseModel):
     liveness_score: float
     synced: bool
     direction: str = "in"
+    name: Optional[str] = None   # kept even when the user was soft-deleted
 
 
 class AttendanceResponse(BaseModel):
