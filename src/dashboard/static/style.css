@@ -286,8 +286,9 @@ tbody tr:hover { background: var(--surface-low); }
 .chip-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .user-name-cell { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .user-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.avatar-cell { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%; background: var(--surface-highest); color: var(--primary); font-size: 11px; font-weight: 700; flex: 0 0 auto; }
+
 .action-cell { width: 1%; white-space: nowrap; }
+.action-cell .btn + .btn { margin-left: 6px; }
 /* Let wide tables scroll horizontally instead of crushing their columns. */
 #users { min-width: 560px; }
 #attendance { min-width: 640px; }
@@ -306,8 +307,15 @@ tbody tr:hover { background: var(--surface-low); }
 .photo-empty { width: 38px; height: 38px; border-radius: 50%; background: var(--surface-highest); display: flex; align-items: center; justify-content: center; color: var(--primary); font-size: 12px; font-weight: 700; }
 
 /* Foto user di kartu hasil sebelah kios Face ID */
-.match-avatar-photo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 18px; }
+/* Foto user di kartu hasil sebelah kios Face ID.
+   PENTING: selector-nya memakai ID (#match-avatar-photo), bukan class —
+   elemen di index.html hanya punya id, TIDAK punya class="match-avatar-photo".
+   Memakai titik di sini membuat seluruh aturan (posisi/ukuran/object-fit)
+   diam-diam tidak berlaku dan foto tampil mentah seukuran aslinya. */
+#match-avatar-photo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 18px; }
 #match-avatar-photo[hidden] { display: none; }
+/* Inisial disembunyikan saat avatar foto tampil. */
+#match-avatar-text[hidden] { display: none; }
 
 /* ── Dialog hapus pengguna ────────────────────────────────── */
 .dlg-backdrop { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(2, 6, 18, 0.62); backdrop-filter: blur(3px); animation: toast-in 0.15s ease-out; }
